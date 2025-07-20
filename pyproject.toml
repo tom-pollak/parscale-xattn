@@ -1,0 +1,14 @@
+[project]
+name = "parscale-xattn"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Tom Pollak", email = "tomp@graphcore.ai" }
+]
+requires-python = ">=3.12"
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
