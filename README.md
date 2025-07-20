@@ -5,6 +5,35 @@ PARSCALE introduces the third scaling paradigm for scaling LLMs: leverages paral
 
 This extension adds **cross-attention across model replicas** to the ParScale paradigm, enabling more flexible data-dependent communication between replicas beyond the existing prefix token mechanism.
 
+## Quick Start
+
+### Installation
+```bash
+pip install -e .
+```
+
+### Training
+```bash
+# Basic ParScale training (parscale_n=1, like standard Qwen2)
+uv run python train.py --config-path=configs --config-name=basic
+
+# ParScale with 4 replicas
+uv run python train.py --config-path=configs --config-name=basic parscale.parscale_n=4
+
+# Cross-attention enabled with 4 replicas
+uv run python train.py --config-path=configs --config-name=cross_attn parscale.parscale_n=4
+
+# Cross-attention on specific layers only
+uv run python train.py --config-path=configs --config-name=cross_attn \
+  parscale.parscale_n=4 \
+  parscale.parscale_cross_attn_layers=[0,4,8,12]
+
+# Custom output directory
+uv run python train.py --config-path=configs --config-name=basic \
+  training.output_dir=./my-model \
+  parscale.parscale_n=2
+```
+
 ## Overview
 
 The original ParScale implementation uses:
@@ -28,42 +57,37 @@ When enabled, the cross-attention mechanism works as follows:
 
 ## Configuration
 
-### Basic Usage
+### Training Configuration
+
+The training script uses YAML configs with OmegaConf CLI overrides. See `configs/` for examples:
+
+- `configs/basic.yaml`: Standard ParScale training 
+- `configs/cross_attn.yaml`: Cross-attention enabled
+
+### Model Configuration Parameters
+
+- `parscale_n` (int, default: 1): Number of parallel replicas
+- `parscale_n_tokens` (int, default: 48): Number of prefix tokens for cross-replica communication  
+- `parscale_enable_cross_attn` (bool, default: False): Enable cross-attention between same-position tokens across replicas
+- `parscale_cross_attn_layers` (list[int], default: None): Layer indices where cross-attention is enabled. If None, applies to all layers when cross-attention is enabled
+
+### Direct Model Usage
 
 ```python
 from parscale_xattn import Qwen2ParScaleForCausalLM, Qwen2ParScaleConfig
 
 # Standard ParScale without cross-attention (original behavior)
-config = Qwen2ParScaleConfig(
-    parscale_n=4,
-    parscale_n_tokens=48,
-    parscale_enable_cross_attn=False  # Default
-)
+config = Qwen2ParScaleConfig(parscale_n=4, parscale_enable_cross_attn=False)
 model = Qwen2ParScaleForCausalLM(config)
 
-# ParScale with cross-attention across all layers
+# ParScale with cross-attention on specific layers only  
 config = Qwen2ParScaleConfig(
     parscale_n=4,
-    parscale_n_tokens=48,
     parscale_enable_cross_attn=True,
-    parscale_cross_attn_layers=None  # All layers (default when enabled)
-)
-model = Qwen2ParScaleForCausalLM(config)
-
-# ParScale with cross-attention on specific layers only
-config = Qwen2ParScaleConfig(
-    parscale_n=4,
-    parscale_n_tokens=48,
-    parscale_enable_cross_attn=True,
-    parscale_cross_attn_layers=[0, 4, 8, 12]  # Only layers 0, 4, 8, 12
+    parscale_cross_attn_layers=[0, 4, 8, 12]
 )
 model = Qwen2ParScaleForCausalLM(config)
 ```
-
-### Configuration Parameters
-
-- `parscale_enable_cross_attn` (bool, default: False): Enable cross-attention between same-position tokens across replicas
-- `parscale_cross_attn_layers` (list[int], default: None): Layer indices where cross-attention is enabled. If None, applies to all layers when cross-attention is enabled
 
 ## Implementation Details
 

@@ -99,12 +99,8 @@ def load_dataset_simple(dataset_name: str, tokenizer, max_length: int):
     return dataset.map(tokenize_function, batched=True).take(10000)  # Small subset for testing
 
 def main():
-    if len(sys.argv) != 2:
-        print("Usage: python train_simple.py config.yaml")
-        sys.exit(1)
-    
-    # Load config
-    omega_conf = OmegaConf.load(sys.argv[1])
+    # Load config with CLI overrides
+    omega_conf = OmegaConf.from_cli()
     config = Config(**omega_conf)
     
     print(f"Training with config: {config}")

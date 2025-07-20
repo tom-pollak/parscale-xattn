@@ -1,0 +1,6 @@
+# Basic config - uses defaults from train.py, only specify what changes
+parscale:
+  parscale_n: 1  # Start with 1, can override with CLI
+
+training:
+  output_dir: "./models/basic"
