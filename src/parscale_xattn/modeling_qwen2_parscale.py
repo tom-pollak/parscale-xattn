@@ -115,8 +115,16 @@ def eager_attention_forward(
     dropout: float = 0.0,
     **kwargs,
 ):
-    key_states = repeat_kv(key, module.num_key_value_groups)
-    value_states = repeat_kv(value, module.num_key_value_groups)
+    # Check if keys/values have been expanded for cross-attention
+    cross_attn_expanded = getattr(module, '_cross_attn_expanded', False)
+
+    if not cross_attn_expanded:
+        key_states = repeat_kv(key, module.num_key_value_groups)
+        value_states = repeat_kv(value, module.num_key_value_groups)
+    else:
+        # Keys/values already expanded for cross-attention, use as-is
+        key_states = key
+        value_states = value
 
     attn_weights = torch.matmul(query, key_states.transpose(2, 3)) * scaling
     if attention_mask is not None:
@@ -208,6 +216,14 @@ class Qwen2Attention(nn.Module):
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
             key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
         
+        # Cross-attention between same-position tokens across replicas
+        use_cross_attn = (
+            self.config.parscale_n > 1 and
+            self.config.parscale_enable_cross_attn and 
+            (self.config.parscale_cross_attn_layers is None or 
+             self.layer_idx in self.config.parscale_cross_attn_layers)
+        )
+        
         if self.config.parscale_n > 1:
 
             # Expand attention mask to contain the prefix tokens
@@ -226,6 +242,26 @@ class Qwen2Attention(nn.Module):
                         torch.zeros((attention_mask.shape[0], attention_mask.shape[1], self.config.parscale_n_tokens, attention_mask.shape[3]), dtype=attention_mask.dtype, device=attention_mask.device), 
                         attention_mask
                     ], dim=2)
+
+            if use_cross_attn:
+                # Reshape to separate replica and batch dimensions
+                batch_size = key_states.size(0) // self.config.parscale_n
+                seq_len = key_states.size(2)
+
+                # Reshape key and value states for cross-replica attention
+                key_states_cross = rearrange(key_states, '(p b) h s d -> b p h s d', p=self.config.parscale_n)
+                value_states_cross = rearrange(value_states, '(p b) h s d -> b p h s d', p=self.config.parscale_n)
+
+                # For each position, concatenate keys/values from all replicas
+                key_states_all_replicas = rearrange(key_states_cross, 'b p h s d -> b h s (p d)')
+                value_states_all_replicas = rearrange(value_states_cross, 'b p h s d -> b h s (p d)')
+
+                # Expand back to (parscale_n * batch_size) format for attention computation
+                key_states = repeat(key_states_all_replicas, 'b h s d -> (p b) h s d', p=self.config.parscale_n)
+                value_states = repeat(value_states_all_replicas, 'b h s d -> (p b) h s d', p=self.config.parscale_n)
+
+        # Set flag to indicate cross-attention expansion
+        self._cross_attn_expanded = use_cross_attn
 
         sliding_window = None
         if (
@@ -261,8 +297,34 @@ class Qwen2Attention(nn.Module):
         if self.config.parscale_n > 1 and query_states.size(2) != 1:
             # Remove the prefix part
             attn_output = attn_output[:, n_virtual_tokens:]
-        attn_output = attn_output.reshape(*input_shape, -1).contiguous()
-        attn_output = self.o_proj(attn_output)
+            
+        # Handle cross-attention output projection
+        if self.config.parscale_n > 1 and use_cross_attn:
+            # attn_output shape: (parscale_n * batch_size, seq_len, parscale_n * num_heads * head_dim)
+            # Need to project back to hidden_size and potentially aggregate across replicas
+            attn_output_reshaped = attn_output.reshape(*input_shape, -1).contiguous()
+            
+            # Project the expanded features back to hidden size
+            # The o_proj expects hidden_size input, but we have parscale_n * hidden_size
+            # We need to handle this dimension mismatch
+            batch_seq_size = attn_output_reshaped.size(0) * attn_output_reshaped.size(1)
+            expanded_features = attn_output_reshaped.view(batch_seq_size, -1)
+            
+            # Simple linear projection to compress parscale_n * hidden_size -> hidden_size
+            if not hasattr(self, 'cross_attn_proj'):
+                self.cross_attn_proj = nn.Linear(
+                    self.config.parscale_n * self.config.hidden_size,
+                    self.config.hidden_size,
+                    bias=False,
+                    device=expanded_features.device,
+                    dtype=expanded_features.dtype
+                )
+            
+            projected_output = self.cross_attn_proj(expanded_features)
+            attn_output = projected_output.view(*input_shape, self.config.hidden_size)
+        else:
+            attn_output = attn_output.reshape(*input_shape, -1).contiguous()
+            attn_output = self.o_proj(attn_output)
         return attn_output, attn_weights
 
 

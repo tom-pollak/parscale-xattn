@@ -7,7 +7,16 @@ authors = [
     { name = "Tom Pollak", email = "tomp@graphcore.ai" }
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "torch>=2.0.0",
+    "transformers>=4.40.0",
+    "einops>=0.6.0",
+    "datasets>=2.14.0",
+    "accelerate>=0.20.0",
+    "tokenizers>=0.13.0",
+    "omegaconf>=2.3.0",
+    "pydantic>=2.0.0",
+]
 
 [build-system]
 requires = ["hatchling"]

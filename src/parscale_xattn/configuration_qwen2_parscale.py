@@ -98,6 +98,18 @@ class Qwen2ParScaleConfig(PretrainedConfig):
             The number of layers that use SWA (Sliding Window Attention). The bottom layers use SWA while the top use full attention.
         attention_dropout (`float`, *optional*, defaults to 0.0):
             The dropout ratio for the attention probabilities.
+        parscale_n (`int`, *optional*, defaults to 1):
+            Number of parallel replicas for ParScale. When set to 1, behaves as standard Qwen2.
+        parscale_n_tokens (`int`, *optional*, defaults to 48):
+            Number of prefix tokens for cross-replica communication via prefix tokens.
+        parscale_attn_smooth (`float`, *optional*, defaults to 0.01):
+            Attention smoothing parameter for output aggregation across replicas.
+        parscale_enable_cross_attn (`bool`, *optional*, defaults to False):
+            Whether to enable cross-attention between same-position tokens across replicas.
+            This provides data-dependent communication beyond prefix tokens.
+        parscale_cross_attn_layers (`list[int]`, *optional*, defaults to None):
+            List of layer indices where cross-attention is enabled. If None, applies to all layers
+            when parscale_enable_cross_attn is True.
 
     ```python
     >>> from transformers import Qwen2Model, Qwen2Config
@@ -149,6 +161,8 @@ class Qwen2ParScaleConfig(PretrainedConfig):
         parscale_n=1,
         parscale_n_tokens=48,
         parscale_attn_smooth=0.01,
+        parscale_enable_cross_attn=False,
+        parscale_cross_attn_layers=None,
         **kwargs,
     ):
         self.vocab_size = vocab_size
@@ -163,6 +177,8 @@ class Qwen2ParScaleConfig(PretrainedConfig):
         self.parscale_n = parscale_n
         self.parscale_n_tokens = parscale_n_tokens
         self.parscale_attn_smooth = parscale_attn_smooth
+        self.parscale_enable_cross_attn = parscale_enable_cross_attn
+        self.parscale_cross_attn_layers = parscale_cross_attn_layers
 
         # for backward compatibility
         if num_key_value_heads is None:
