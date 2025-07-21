@@ -133,10 +133,14 @@ def proc_dataset(dataset_name):
                 "Python",
                 split="train",
                 streaming=True,
-                trust_remote_code=True,
             ).rename_column("content", "text")
         case "pile":
-            return load_dataset("EleutherAI/pile", split="train", streaming=True)
+            return load_dataset(
+                "EleutherAI/pile",
+                split="train",
+                streaming=True,
+                trust_remote_code=True,
+            )
         case _:
             raise ValueError("invalid name", dataset_name)
 
@@ -167,6 +171,10 @@ def mk_config() -> Config:
 
 
 def main():
+    # Set group for distributed training to avoid duplicate wandb.init() calls
+    if "WANDB_RUN_GROUP" not in os.environ:
+        os.environ["WANDB_RUN_GROUP"] = f"experiment-{wandb.util.generate_id()}"
+
     wandb.init(project=os.environ["WANDB_PROJECT"])
 
     config = mk_config()
