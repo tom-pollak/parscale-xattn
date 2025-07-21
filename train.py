@@ -30,7 +30,7 @@ class ParScaleConfig:
 @dataclass
 class TrainingConfig:
     base_model: str = "Qwen/Qwen2-1.5B"
-    dataset: str = "bigcode/the-stack"
+    dataset: Literal["stack", "pile"] = "stack"
     output_dir: str = "./parscale-model"
     max_length: int = 2048
     per_device_train_batch_size: int = 4
@@ -124,7 +124,7 @@ def convert_qwen2_to_parscale(
     return parscale_model
 
 
-def proc_dataset(dataset_name: Literal["stack", "pile"]):
+def proc_dataset(dataset_name):
     """Load and tokenize dataset."""
     match dataset_name:
         case "stack":
@@ -160,7 +160,7 @@ def mk_config() -> Config:
     )
     config = OmegaConf.to_container(config, structured_config_mode=SCMode.DICT)
 
-    config = TypeAdapter(Config).model_validate(config)
+    config = TypeAdapter(Config).validate_python(config)
     print(f"####\n{config.to_yaml()}\n####")
     return config
 
