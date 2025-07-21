@@ -166,6 +166,8 @@ def mk_config() -> Config:
 
 
 def main():
+    wandb.init(project=os.environ["WANDB_PROJECT"])
+
     config = mk_config()
 
     tokenizer = AutoTokenizer.from_pretrained(config.training.base_model)
