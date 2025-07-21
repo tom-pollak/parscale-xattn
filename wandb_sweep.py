@@ -68,6 +68,7 @@ def main():
 
     config = {**BASE_CONFIG, **SWEEP_CONFIGS[sweep_name]}
     sweep_id = wandb.sweep(config, project=PROJECT_NAME)
+    print("Run with:\n", f"uv run wandb agent graphcore/{PROJECT_NAME}/{sweep_id}")
 
 
 if __name__ == "__main__":

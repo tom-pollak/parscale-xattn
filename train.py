@@ -136,11 +136,12 @@ def proc_dataset(dataset_name: Literal["stack", "pile"]):
 
 
 def mk_config() -> Config:
-    if not (config_file := os.environ.get("CONFIG_FILE")):
-        raise ValueError("CONFIG_FILE env var not set!")
 
     base_config: Config = OmegaConf.structured(Config)
-    yaml_config = OmegaConf.load(config_file)
+    if config_file := os.environ.get("CONFIG_FILE"):
+        yaml_config = OmegaConf.load(config_file)
+    else:
+        yaml_config = {}
     cli_config = OmegaConf.from_cli()
     wandb_config = OmegaConf.from_dotlist(
         [f"{k}={v}" for k, v in dict(wandb.config).items()]
