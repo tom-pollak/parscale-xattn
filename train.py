@@ -133,6 +133,7 @@ def proc_dataset(dataset_name):
                 "Python",
                 split="train",
                 streaming=True,
+                trust_remote_code=True,
             ).rename_column("content", "text")
         case "pile":
             return load_dataset("EleutherAI/pile", split="train", streaming=True)
