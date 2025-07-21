@@ -158,7 +158,8 @@ def mk_config() -> Config:
 
 
 def main():
-    wandb.init(project=os.environ["WANDB_PROJECT"])
+    if not wandb.run:
+        wandb.init(project=os.environ["WANDB_PROJECT"])
 
     config = mk_config()
 
