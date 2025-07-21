@@ -184,6 +184,16 @@ def main():
         max_length=config.training.max_length,
     )
 
+    fsdp_config = {
+        "fsdp_activation_checkpointing": True,
+        "fsdp_auto_wrap_policy": "TRANSFORMER_BASED_WRAP",
+        "fsdp_cpu_ram_efficient_loading": True,
+        "fsdp_offload_params": False,
+        "fsdp_reshard_after_forward": True,
+        "fsdp_state_dict_type": "SHARDED_STATE_DICT",
+        "fsdp_transformer_layer_cls_to_wrap": "Qwen2DecoderLayer",
+    }
+
     training_args = TrainingArguments(
         output_dir=config.training.output_dir,
         max_steps=config.training.max_steps,
@@ -195,15 +205,14 @@ def main():
         save_steps=config.training.save_steps,
         save_total_limit=config.training.save_total_limit,
         bf16=torch.cuda.is_available(),
-        gradient_checkpointing=True,
         remove_unused_columns=False,
         report_to="wandb",
         # Learning rate schedule - constant with warmup like paper's stage 2
         lr_scheduler_type="constant_with_warmup",
         # Multi-GPU setup
         ddp_find_unused_parameters=False,
-        fsdp="full_shard auto_wrap",
-        fsdp_transformer_layer_cls_to_wrap="Qwen2DecoderLayer",
+        fsdp="full_shard",
+        fsdp_config=fsdp_config,
     )
 
     trainer = Trainer(
