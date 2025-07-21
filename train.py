@@ -5,7 +5,7 @@ import torch
 import wandb
 from datasets import load_dataset
 from omegaconf import OmegaConf, SCMode
-from pydantic import BaseModel
+from pydantic.dataclasses import dataclass
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -17,14 +17,16 @@ from transformers import (
 from src.parscale_xattn import Qwen2ParScaleConfig, Qwen2ParScaleForCausalLM
 
 
-class ParScaleConfig(BaseModel):
+@dataclass
+class ParScaleConfig:
     parscale_n: int = 4
     parscale_n_tokens: int = 48
     enable_cross_attn: bool = False
     parscale_cross_attn_layers: Optional[list[int]] = None
 
 
-class TrainingConfig(BaseModel):
+@dataclass
+class TrainingConfig:
     base_model: str = "Qwen/Qwen2-1.5B"
     dataset: str = "bigcode/the-stack"
     output_dir: str = "./parscale-model"
@@ -40,7 +42,8 @@ class TrainingConfig(BaseModel):
     seed: int = 42
 
 
-class Config(BaseModel):
+@dataclass
+class Config:
     parscale: ParScaleConfig = ParScaleConfig()
     training: TrainingConfig = TrainingConfig()
 
@@ -136,12 +139,12 @@ def proc_dataset(dataset_name: Literal["stack", "pile"]):
 
 
 def mk_config() -> Config:
-
     base_config: Config = OmegaConf.structured(Config)
-    if config_file := os.environ.get("CONFIG_FILE"):
-        yaml_config = OmegaConf.load(config_file)
-    else:
-        yaml_config = {}
+    yaml_config = (
+        OmegaConf.load(config_file)
+        if (config_file := os.environ.get("CONFIG_FILE"))
+        else {}
+    )
     cli_config = OmegaConf.from_cli()
     wandb_config = OmegaConf.from_dotlist(
         [f"{k}={v}" for k, v in dict(wandb.config).items()]
