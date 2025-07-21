@@ -178,11 +178,17 @@ def main():
     model = convert_qwen2_to_parscale(config.training.base_model, config.parscale)
     dataset = proc_dataset(config.training.dataset)
 
-    data_collator = DataCollatorWithPadding(
-        tokenizer,
-        padding="longest",
-        max_length=config.training.max_length,
-    )
+    def collate_fn(features):
+        texts = [f["text"] for f in features]
+        batch = tokenizer(
+            texts,
+            padding="longest",
+            truncation=True,
+            max_length=config.training.max_length,
+            return_tensors="pt",
+        )
+        batch["labels"] = batch["input_ids"].clone()
+        return batch
 
     fsdp_config = {
         "fsdp_activation_checkpointing": True,
@@ -218,7 +224,7 @@ def main():
     trainer = Trainer(
         model=model,
         args=training_args,
-        data_collator=data_collator,
+        data_collator=collate_fn,
         train_dataset=dataset,
     )
 
