@@ -77,6 +77,7 @@ def single_sweep():
 
     env = os.environ.copy()
     env["CONFIG_FILE"] = fp.name
+    env["WANDB_PROJECT"] = PROJECT_NAME
 
     cmd = [
         "accelerate",
