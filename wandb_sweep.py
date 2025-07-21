@@ -75,7 +75,7 @@ def single_sweep():
     OmegaConf.save(config=wandb_config, f=fp.name)
 
     cmd = [
-        f"CONFIG_FILE={wandb_config}",
+        f"CONFIG_FILE={fp.name}",
         "torchrun",
         "--nproc_per_node",
         "8",
