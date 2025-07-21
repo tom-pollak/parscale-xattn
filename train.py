@@ -1,12 +1,13 @@
 import os
+from dataclasses import field
 from typing import Literal, Optional
 
 import torch
 import wandb
 from datasets import load_dataset
 from omegaconf import OmegaConf, SCMode
+from pydantic import TypeAdapter
 from pydantic.dataclasses import dataclass
-from dataclasses import field
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -159,7 +160,7 @@ def mk_config() -> Config:
     )
     config = OmegaConf.to_container(config, structured_config_mode=SCMode.DICT)
 
-    config = Config.model_validate(config)
+    config = TypeAdapter(Config).model_validate(config)
     print(f"####\n{config.to_yaml()}\n####")
     return config
 
