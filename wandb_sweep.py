@@ -87,15 +87,25 @@ def single_sweep():
     ]
 
     try:
-        result = subprocess.run(
+        process = subprocess.Popen(
             cmd,
             env=env,
-            check=True,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
+            bufsize=1,
+            universal_newlines=True,
         )
+        
+        # Stream output in real-time
+        for line in process.stdout:
+            print(line, end="")
+        
+        process.wait()
+        if process.returncode != 0:
+            raise subprocess.CalledProcessError(process.returncode, cmd)
+        
         print("Training completed successfully")
-        print(result.stdout)
     except subprocess.CalledProcessError as e:
         print(f"Training failed: {e}")
         wandb.log({"training_failed": True})
