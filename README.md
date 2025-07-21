@@ -13,6 +13,8 @@ pip install -e .
 ```
 
 ### Training
+
+#### Single GPU
 ```bash
 # Basic ParScale training (parscale_n=1, like standard Qwen2)
 uv run python train.py --config-path=configs --config-name=basic
@@ -22,17 +24,72 @@ uv run python train.py --config-path=configs --config-name=basic parscale.parsca
 
 # Cross-attention enabled with 4 replicas
 uv run python train.py --config-path=configs --config-name=cross_attn parscale.parscale_n=4
+```
 
-# Cross-attention on specific layers only
-uv run python train.py --config-path=configs --config-name=cross_attn \
+#### Multi-GPU (8 GPUs with FSDP)
+```bash
+# Basic ParScale training with 8 GPUs
+torchrun --nproc_per_node=8 train.py \
+  --config-path=configs --config-name=basic \
   parscale.parscale_n=4 \
-  parscale.parscale_cross_attn_layers=[0,4,8,12]
+  training.per_device_train_batch_size=1 \
+  training.gradient_accumulation_steps=16
 
-# Custom output directory
+# Cross-attention with 8 GPUs
+torchrun --nproc_per_node=8 train.py \
+  --config-path=configs --config-name=cross_attn \
+  parscale.parscale_n=4 \
+  training.per_device_train_batch_size=1 \
+  training.gradient_accumulation_steps=16
+
+# Larger model (Qwen2-7B) with selective cross-attention
+torchrun --nproc_per_node=8 train.py \
+  --config-path=configs --config-name=cross_attn \
+  training.base_model=Qwen/Qwen2-7B \
+  parscale.parscale_n=8 \
+  parscale.parscale_cross_attn_layers=[0,4,8,12,16,20,24,28] \
+  training.per_device_train_batch_size=1 \
+  training.gradient_accumulation_steps=32
+```
+
+#### Configuration Overrides
+```bash
+# Custom output directory and training parameters
 uv run python train.py --config-path=configs --config-name=basic \
   training.output_dir=./my-model \
+  training.learning_rate=3e-5 \
   parscale.parscale_n=2
 ```
+
+### Hyperparameter Sweeps with Wandb
+
+For systematic experimentation, use the wandb sweep script to replicate original paper results:
+
+```bash
+# 1. Learning rate verification (P=1,4 × 4 learning rates = 8 runs)
+python wandb_sweep.py create lr_verification
+wandb agent <sweep_id>
+
+# 2. Original paper replication: P=1,2,4,8 with fixed LR (4 runs)
+python wandb_sweep.py create parscale_scaling
+wandb agent <sweep_id>
+
+# 3. Cross-attention on all layers with P=1,2,4,8 (4 runs)  
+python wandb_sweep.py create xattn_all_layers
+wandb agent <sweep_id>
+
+# 4. Cross-attention on preset layers [0,6,12,18] with P=1,2,4,8 (4 runs)
+python wandb_sweep.py create xattn_preset_layers
+wandb agent <sweep_id>
+```
+
+**Sweep Descriptions:**
+- `lr_verification`: Tests learning rates [1e-4, 3e-4, 5e-4, 1e-3] with P=1 and P=4 to verify optimal LR
+- `parscale_scaling`: Replicates original paper's P=1,2,4,8 scaling experiments 
+- `xattn_all_layers`: Same scaling but with cross-attention enabled on all layers
+- `xattn_preset_layers`: Same scaling but with cross-attention on layers [0,6,12,18] only
+
+Total: 20 focused runs across all sweeps.
 
 ## Overview
 
@@ -59,8 +116,18 @@ When enabled, the cross-attention mechanism works as follows:
 
 ### Training Configuration
 
-The training script uses YAML configs with OmegaConf CLI overrides. See `configs/` for examples:
+The training script follows the original ParScale paper's hyperparameters for continual pre-training (Stage 2):
 
+**Default Hyperparameters:**
+- **Learning Rate**: 3e-4 (Stage 2 from paper)
+- **Schedule**: Constant with warmup (WSD-style)
+- **Warmup Steps**: 2000 (2K from paper)
+- **Batch Size**: 4 per device × 4 gradient accumulation = 16 effective batch size
+- **Model**: Qwen2-1.5B (similar to paper's 1.8B model)
+
+The training approach converts an existing Qwen2 model to ParScale format and continues training with newly initialized ParScale parameters (prefix tokens + optional cross-attention), similar to the paper's two-stage strategy where Stage 2 adds ParScale to an already-trained model.
+
+**Configuration Files:**
 - `configs/basic.yaml`: Standard ParScale training 
 - `configs/cross_attn.yaml`: Cross-attention enabled
 
