@@ -1,9 +1,8 @@
 import os
 from dataclasses import field
-from typing import Literal, Optional
+from typing import Optional
 
 import torch
-import torch.distributed as dist
 import wandb
 from datasets import load_dataset
 from omegaconf import OmegaConf, SCMode
@@ -31,7 +30,7 @@ class ParScaleConfig:
 @dataclass
 class TrainingConfig:
     base_model: str = "Qwen/Qwen2-1.5B"
-    dataset: str = "stack"
+    dataset: str = "pile"
     output_dir: str = "./parscale-model"
     max_length: int = 2048
     per_device_train_batch_size: int = 4
@@ -131,7 +130,7 @@ def proc_dataset(dataset_name):
         case "stack":
             return load_dataset(
                 "bigcode/the-stack-dedup",
-                data_dir="data/python",
+                "Python",
                 split="train",
                 streaming=True,
             ).rename_column("content", "text")
@@ -167,9 +166,6 @@ def mk_config() -> Config:
 
 
 def main():
-    if dist.get_rank() == 0:
-        wandb.init(project=os.environ["WANDB_PROJECT"])
-
     config = mk_config()
 
     tokenizer = AutoTokenizer.from_pretrained(config.training.base_model)
@@ -211,11 +207,9 @@ def main():
         train_dataset=dataset,
     )
 
-    print("Starting training...")
     trainer.train()
     trainer.save_model()
     tokenizer.save_pretrained(config.training.output_dir)
-    print(f"Training completed! Model saved to {config.training.output_dir}")
 
 
 if __name__ == "__main__":
