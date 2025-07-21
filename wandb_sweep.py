@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Wandb sweep script to replicate original ParScale paper experiments.
 Focused sweeps with only the parameters we're changing.
@@ -11,7 +10,8 @@ import tempfile
 import wandb
 from omegaconf import OmegaConf
 
-# Simplified sweep configurations
+PROJECT_NAME = "parscale-cross-attention"
+
 SWEEP_CONFIGS = {
     # 1. First verify learning rate with P=1 and P=4
     "lr_verification": {
@@ -71,8 +71,8 @@ def single_sweep():
     )
     wandb_config.training.output_dir = f"./models/{run.name}"
 
-    with tempfile.NamedTemporaryFile() as fp:
-        OmegaConf.save(config=wandb_config, f=fp.name)
+    fp = tempfile.NamedTemporaryFile()
+    OmegaConf.save(config=wandb_config, f=fp.name)
 
     cmd = [
         f"CONFIG_FILE={wandb_config}",
@@ -90,59 +90,20 @@ def single_sweep():
     except subprocess.CalledProcessError as e:
         print(f"Training failed: {e}")
         wandb.log({"training_failed": True})
-        return
 
+    fp.close()
     wandb.finish()
 
 
-def create_sweep(sweep_name: str, project: str = "parscale-cross-attention"):
-    """Create a wandb sweep."""
+def main():
+    sweep_name = sys.argv[1] if len(sys.argv) > 1 else None
     if sweep_name not in SWEEP_CONFIGS:
         print(f"Unknown sweep: {sweep_name}")
         print(f"Available sweeps: {list(SWEEP_CONFIGS.keys())}")
         return None
 
-    sweep_config = SWEEP_CONFIGS[sweep_name].copy()
-    sweep_config["program"] = "wandb_sweep.py run"
-
-    print(f"Creating sweep: {sweep_name}")
-
-    sweep_id = wandb.sweep(sweep_config, project=project)
-    print(f"Created sweep: {sweep_id}")
-    print(f"Run with: wandb agent {sweep_id}")
-
-    return sweep_id
-
-
-def main():
-    if len(sys.argv) < 2:
-        print("Usage:")
-        print("  python wandb_sweep.py create <sweep_name>  # Create a sweep")
-        print(
-            "  python wandb_sweep.py run                  # Run training (called by wandb agent)"
-        )
-        print("\nAvailable sweeps:")
-        for name, config in SWEEP_CONFIGS.items():
-            print(f"  {name}: {config['description']}")
-        return
-
-    command = sys.argv[1]
-
-    if command == "create":
-        if len(sys.argv) < 3:
-            print("Available sweeps:")
-            for name, config in SWEEP_CONFIGS.items():
-                print(f"  {name}: {config['description']}")
-            return
-        sweep_name = sys.argv[2]
-        project = sys.argv[3] if len(sys.argv) > 3 else "parscale-cross-attention"
-        create_sweep(sweep_name, project)
-
-    elif command == "run":
-        single_sweep()
-
-    else:
-        print(f"Unknown command: {command}")
+    sweep_id = wandb.sweep(SWEEP_CONFIGS[sweep_name], project=PROJECT_NAME)
+    wandb.agent(sweep_id, function=single_sweep)
 
 
 if __name__ == "__main__":
