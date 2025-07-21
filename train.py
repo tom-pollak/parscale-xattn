@@ -136,10 +136,9 @@ def proc_dataset(dataset_name):
             ).rename_column("content", "text")
         case "pile":
             return load_dataset(
-                "EleutherAI/pile",
+                "monology/pile-uncopyrighted",
                 split="train",
                 streaming=True,
-                trust_remote_code=True,
             )
         case _:
             raise ValueError("invalid name", dataset_name)
