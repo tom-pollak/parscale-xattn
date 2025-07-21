@@ -79,9 +79,8 @@ def single_sweep():
     env["CONFIG_FILE"] = fp.name
 
     cmd = [
-        "torchrun",
-        "--nproc_per_node",
-        "8",
+        "accelerate",
+        "launch",
         "train.py",
         f"--training.output_dir./sweeps/{run.name}",
     ]
