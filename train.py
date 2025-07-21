@@ -158,10 +158,11 @@ def mk_config() -> Config:
         cli_config,
         wandb_config,  # sweep config
     )
-    config = OmegaConf.to_container(config, structured_config_mode=SCMode.DICT)
-
-    config = TypeAdapter(Config).validate_python(config)
     print(f"####\n{config.to_yaml()}\n####")
+
+    ## Validate Pydantic
+    config = OmegaConf.to_container(config, structured_config_mode=SCMode.DICT)
+    config = TypeAdapter(Config).validate_python(config)
     return config
 
 
