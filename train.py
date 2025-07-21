@@ -6,6 +6,7 @@ import wandb
 from datasets import load_dataset
 from omegaconf import OmegaConf, SCMode
 from pydantic.dataclasses import dataclass
+from pydantic import Field
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -44,8 +45,8 @@ class TrainingConfig:
 
 @dataclass
 class Config:
-    parscale: ParScaleConfig = ParScaleConfig()
-    training: TrainingConfig = TrainingConfig()
+    parscale: ParScaleConfig = Field(default_factory=ParScaleConfig)
+    training: TrainingConfig = Field(default_factory=TrainingConfig)
 
 
 def convert_qwen2_to_parscale(
