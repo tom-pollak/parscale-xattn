@@ -20,7 +20,7 @@ SWEEP_CONFIGS = {
         "method": "grid",
         "parameters": {
             "parscale.parscale_n": {"values": [1, 4]},
-            "parscale.enable_cross_attn": {"values": False},
+            "parscale.enable_cross_attn": {"value": False},
             "training.learning_rate": {"values": [1e-4, 3e-4, 5e-4, 1e-3]},
         },
     },
@@ -31,7 +31,7 @@ SWEEP_CONFIGS = {
         "method": "grid",
         "parameters": {
             "parscale.parscale_n": {"values": [1, 2, 4, 8]},
-            "parscale.enable_cross_attn": {"values": False},
+            "parscale.enable_cross_attn": {"value": False},
         },
     },
     # 3. Same as above but with cross-attention on all layers
