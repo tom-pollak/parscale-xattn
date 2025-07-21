@@ -30,7 +30,7 @@ class ParScaleConfig:
 @dataclass
 class TrainingConfig:
     base_model: str = "Qwen/Qwen2-1.5B"
-    dataset: str = "pile"
+    dataset: str = "pajama"
     output_dir: str = "./parscale-model"
     max_length: int = 2048
     per_device_train_batch_size: int = 4
@@ -134,9 +134,9 @@ def proc_dataset(dataset_name):
                 split="train",
                 streaming=True,
             ).rename_column("content", "text")
-        case "pile":
+        case "pajama":
             return load_dataset(
-                "monology/pile-uncopyrighted",
+                "cerebras/SlimPajama-627B",
                 split="train",
                 streaming=True,
             )
