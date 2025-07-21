@@ -3,6 +3,7 @@ from dataclasses import field
 from typing import Literal, Optional
 
 import torch
+import torch.distributed as dist
 import wandb
 from datasets import load_dataset
 from omegaconf import OmegaConf, SCMode
@@ -166,7 +167,8 @@ def mk_config() -> Config:
 
 
 def main():
-    wandb.init(project=os.environ["WANDB_PROJECT"])
+    if dist.get_rank() == 0:
+        wandb.init(project=os.environ["WANDB_PROJECT"])
 
     config = mk_config()
 

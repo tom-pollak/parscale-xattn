@@ -9,7 +9,13 @@ import wandb
 
 PROJECT_NAME = "parscale-cross-attention"
 
-BASE_CONFIG = {"command": ["accelerate", "launch", "train.py"]}
+BASE_CONFIG = {
+    "command": ["accelerate", "launch", "train.py"],
+    "metric": {
+        "name": "train/loss",
+        "goal": "minimize",
+    },
+}
 
 SWEEP_CONFIGS = {
     # 1. First verify learning rate with P=1 and P=4
