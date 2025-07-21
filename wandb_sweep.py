@@ -3,15 +3,13 @@ Wandb sweep script to replicate original ParScale paper experiments.
 Focused sweeps with only the parameters we're changing.
 """
 
-import os
-import subprocess
 import sys
-import tempfile
 
 import wandb
-from omegaconf import OmegaConf
 
 PROJECT_NAME = "parscale-cross-attention"
+
+BASE_CONFIG = {"command": ["accelerate", "launch", "train.py"]}
 
 SWEEP_CONFIGS = {
     # 1. First verify learning rate with P=1 and P=4
@@ -61,59 +59,6 @@ SWEEP_CONFIGS = {
 }
 
 
-def single_sweep():
-    """Training function called by wandb agent."""
-
-    # Initialize wandb run
-    run = wandb.init()
-
-    wandb_config = OmegaConf.from_dotlist(
-        [f"{k}={v}" for k, v in dict(wandb.config).items()]
-    )
-    wandb_config.training.output_dir = f"./models/{run.name}"
-
-    fp = tempfile.NamedTemporaryFile(suffix=".yaml")
-    OmegaConf.save(config=wandb_config, f=fp.name)
-
-    env = os.environ.copy()
-    env["CONFIG_FILE"] = fp.name
-    env["WANDB_PROJECT"] = PROJECT_NAME
-
-    cmd = [
-        "accelerate",
-        "launch",
-        "train.py",
-        f"--training.output_dir=./sweeps/{run.name}",
-    ]
-
-    try:
-        process = subprocess.Popen(
-            cmd,
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-            universal_newlines=True,
-        )
-        
-        # Stream output in real-time
-        for line in process.stdout:
-            print(line, end="")
-        
-        process.wait()
-        if process.returncode != 0:
-            raise subprocess.CalledProcessError(process.returncode, cmd)
-        
-        print("Training completed successfully")
-    except subprocess.CalledProcessError as e:
-        print(f"Training failed: {e}")
-        wandb.log({"training_failed": True})
-
-    fp.close()
-    wandb.finish()
-
-
 def main():
     sweep_name = sys.argv[1] if len(sys.argv) > 1 else None
     if sweep_name not in SWEEP_CONFIGS:
@@ -121,8 +66,8 @@ def main():
         print(f"Available sweeps: {list(SWEEP_CONFIGS.keys())}")
         return None
 
-    sweep_id = wandb.sweep(SWEEP_CONFIGS[sweep_name], project=PROJECT_NAME)
-    wandb.agent(sweep_id, function=single_sweep)
+    config = {**BASE_CONFIG, **SWEEP_CONFIGS[sweep_name]}
+    sweep_id = wandb.sweep(config, project=PROJECT_NAME)
 
 
 if __name__ == "__main__":

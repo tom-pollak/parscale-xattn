@@ -142,7 +142,9 @@ def mk_config() -> Config:
     base_config: Config = OmegaConf.structured(Config)
     yaml_config = OmegaConf.load(config_file)
     cli_config = OmegaConf.from_cli()
-    wandb_config = OmegaConf.create(wandb.config)
+    wandb_config = OmegaConf.from_dotlist(
+        [f"{k}={v}" for k, v in dict(wandb.config).items()]
+    )
 
     config = OmegaConf.merge(
         base_config,
@@ -158,8 +160,7 @@ def mk_config() -> Config:
 
 
 def main():
-    if not wandb.run:
-        wandb.init(project=os.environ["WANDB_PROJECT"])
+    wandb.init(project=os.environ["WANDB_PROJECT"])
 
     config = mk_config()
 
