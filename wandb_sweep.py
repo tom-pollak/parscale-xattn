@@ -3,6 +3,7 @@ Wandb sweep script to replicate original ParScale paper experiments.
 Focused sweeps with only the parameters we're changing.
 """
 
+import os
 import subprocess
 import sys
 import tempfile
@@ -71,11 +72,13 @@ def single_sweep():
     )
     wandb_config.training.output_dir = f"./models/{run.name}"
 
-    fp = tempfile.NamedTemporaryFile()
+    fp = tempfile.NamedTemporaryFile(suffix=".yaml")
     OmegaConf.save(config=wandb_config, f=fp.name)
 
+    env = os.environ.copy()
+    env["CONFIG_FILE"] = fp.name
+
     cmd = [
-        f"CONFIG_FILE={fp.name}",
         "torchrun",
         "--nproc_per_node",
         "8",
@@ -84,7 +87,13 @@ def single_sweep():
     ]
 
     try:
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        result = subprocess.run(
+            cmd,
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
         print("Training completed successfully")
         print(result.stdout)
     except subprocess.CalledProcessError as e:
