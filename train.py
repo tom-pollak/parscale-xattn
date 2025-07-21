@@ -182,7 +182,7 @@ def main():
         texts = [f["text"] for f in features]
         batch = tokenizer(
             texts,
-            padding="longest",
+            padding="max_length",
             truncation=True,
             max_length=config.training.max_length,
             return_tensors="pt",
