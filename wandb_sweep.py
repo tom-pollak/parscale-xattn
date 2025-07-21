@@ -82,7 +82,7 @@ def single_sweep():
         "accelerate",
         "launch",
         "train.py",
-        f"--training.output_dir./sweeps/{run.name}",
+        f"--training.output_dir=./sweeps/{run.name}",
     ]
 
     try:
