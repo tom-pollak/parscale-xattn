@@ -110,8 +110,10 @@ The training script follows the original ParScale paper's hyperparameters for co
 - **Learning Rate**: 3e-4 (Stage 2 from paper)
 - **Schedule**: Constant with warmup (WSD-style)
 - **Warmup Steps**: 2000 (2K from paper)
+- **Max Steps**: 76,294 (~20B tokens as in paper's Stage 2)
 - **Batch Size**: 4 per device × 4 gradient accumulation = 16 effective batch size
 - **Model**: Qwen2-1.5B (similar to paper's 1.8B model)
+- **Checkpointing**: Save only final checkpoint to save disk space
 
 The training approach converts an existing Qwen2 model to ParScale format and continues training with newly initialized ParScale parameters (prefix tokens + optional cross-attention), similar to the paper's two-stage strategy where Stage 2 adds ParScale to an already-trained model.
 

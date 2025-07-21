@@ -31,11 +31,12 @@ class TrainingConfig(BaseModel):
     max_length: int = 2048
     per_device_train_batch_size: int = 4
     gradient_accumulation_steps: int = 4
-    num_train_epochs: int = 1
+    max_steps: int = 76294  # 20B tokens ÷ (4×4×2048×8) ≈ 76k steps from paper
     learning_rate: float = 3e-4  # Stage 2 learning rate from paper
     warmup_steps: int = 2000  # 2K warm-up from paper
-    save_steps: int = 5000
-    logging_steps: int = 100
+    save_steps: int = 76294  # Save only at the end
+    save_total_limit: int = 1  # Keep only final checkpoint
+    logging_steps: int = 1000  # Log every 1000 steps for long training
     seed: int = 42
 
 
@@ -173,13 +174,14 @@ def main():
 
     training_args = TrainingArguments(
         output_dir=config.training.output_dir,
-        num_train_epochs=config.training.num_train_epochs,
+        max_steps=config.training.max_steps,
         per_device_train_batch_size=config.training.per_device_train_batch_size,
         gradient_accumulation_steps=config.training.gradient_accumulation_steps,
         learning_rate=config.training.learning_rate,
         warmup_steps=config.training.warmup_steps,
         logging_steps=config.training.logging_steps,
         save_steps=config.training.save_steps,
+        save_total_limit=config.training.save_total_limit,
         bf16=torch.cuda.is_available(),
         gradient_checkpointing=True,
         remove_unused_columns=False,
