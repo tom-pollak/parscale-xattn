@@ -30,7 +30,7 @@ class ParScaleConfig:
 @dataclass
 class TrainingConfig:
     base_model: str = "Qwen/Qwen2-1.5B"
-    dataset: Literal["stack", "pile"] = "stack"
+    dataset: str = "stack"
     output_dir: str = "./parscale-model"
     max_length: int = 2048
     per_device_train_batch_size: int = 4
