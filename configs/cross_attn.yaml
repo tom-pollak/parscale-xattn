@@ -1,7 +1,6 @@
-# Cross-attention config
 parscale:
-  parscale_n: 1  # Start with 1, can override with CLI
-  parscale_enable_cross_attn: true
+  parscale_n: 1
+  enable_cross_attn: true
 
 training:
   output_dir: "./models/cross-attn"

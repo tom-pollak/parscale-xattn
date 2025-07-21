@@ -1,6 +1,6 @@
 """
 This is the inference code for ParScale, Based on Qwen2. It can be used directly to load existing Qwen2 models (setting parscale_n = 1 by default).
-All modifications are wrapped within the condition 'parscale_n > 1'. 
+All modifications are wrapped within the condition 'parscale_n > 1'.
 If you are interested in how ParScale is implemented, please search for "parscale_n" in this file.
 """
 
@@ -101,7 +101,9 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     batch, num_key_value_heads, slen, head_dim = hidden_states.shape
     if n_rep == 1:
         return hidden_states
-    hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
+    hidden_states = hidden_states[:, :, None, :, :].expand(
+        batch, num_key_value_heads, n_rep, slen, head_dim
+    )
     return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
 
 
@@ -116,7 +118,7 @@ def eager_attention_forward(
     **kwargs,
 ):
     # Check if keys/values have been expanded for cross-attention
-    cross_attn_expanded = getattr(module, '_cross_attn_expanded', False)
+    cross_attn_expanded = getattr(module, "_cross_attn_expanded", False)
 
     if not cross_attn_expanded:
         key_states = repeat_kv(key, module.num_key_value_groups)
@@ -131,21 +133,29 @@ def eager_attention_forward(
         causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
         attn_weights = attn_weights + causal_mask
 
-    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
-    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(
+        query.dtype
+    )
+    attn_weights = nn.functional.dropout(
+        attn_weights, p=dropout, training=module.training
+    )
     attn_output = torch.matmul(attn_weights, value_states)
     attn_output = attn_output.transpose(1, 2).contiguous()
 
     return attn_output, attn_weights
 
+
 class ParscaleCache(DynamicCache):
     def __init__(self, prefix_k, prefix_v) -> None:
         super().__init__()
-        self._seen_tokens = 0  # Used in `generate` to keep tally of how many tokens the cache has seen
+        self._seen_tokens = (
+            0  # Used in `generate` to keep tally of how many tokens the cache has seen
+        )
         self.key_cache: List[torch.Tensor] = prefix_k
         self.value_cache: List[torch.Tensor] = prefix_v
         self.parscale_n = prefix_k[0].size(0)
         self.n_prefix_tokens = prefix_k[0].size(2)
+
     def update(
         self,
         key_states: torch.Tensor,
@@ -155,11 +165,19 @@ class ParscaleCache(DynamicCache):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         if self.key_cache[layer_idx].size(0) != key_states.size(0):
             # first time generation
-            self.key_cache[layer_idx] = repeat(self.key_cache[layer_idx], 'n_parscale ... -> (n_parscale b) ...', b=key_states.size(0) // self.parscale_n)
-            self.value_cache[layer_idx] = repeat(self.value_cache[layer_idx], 'n_parscale ... -> (n_parscale b) ...', b=key_states.size(0) // self.parscale_n)
+            self.key_cache[layer_idx] = repeat(
+                self.key_cache[layer_idx],
+                "n_parscale ... -> (n_parscale b) ...",
+                b=key_states.size(0) // self.parscale_n,
+            )
+            self.value_cache[layer_idx] = repeat(
+                self.value_cache[layer_idx],
+                "n_parscale ... -> (n_parscale b) ...",
+                b=key_states.size(0) // self.parscale_n,
+            )
         return super().update(key_states, value_states, layer_idx, cache_kwargs)
 
-    def get_seq_length(self, layer_idx = 0):
+    def get_seq_length(self, layer_idx=0):
         seq_len = super().get_seq_length(layer_idx)
         if seq_len != 0:
             seq_len -= self.n_prefix_tokens
@@ -171,6 +189,7 @@ class ParscaleCache(DynamicCache):
         beam_idx = torch.cat([beam_idx + b * i for i in range(self.parscale_n)])
         super().reorder_cache(beam_idx)
 
+
 class Qwen2Attention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
 
@@ -178,19 +197,48 @@ class Qwen2Attention(nn.Module):
         super().__init__()
         self.config = config
         self.layer_idx = layer_idx
-        self.head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
-        self.num_key_value_groups = config.num_attention_heads // config.num_key_value_heads
+        self.head_dim = getattr(
+            config, "head_dim", config.hidden_size // config.num_attention_heads
+        )
+        self.num_key_value_groups = (
+            config.num_attention_heads // config.num_key_value_heads
+        )
         self.scaling = self.head_dim**-0.5
         self.attention_dropout = config.attention_dropout
         self.is_causal = True
-        self.q_proj = nn.Linear(config.hidden_size, config.num_attention_heads * self.head_dim, bias=True)
-        self.k_proj = nn.Linear(config.hidden_size, config.num_key_value_heads * self.head_dim, bias=True)
-        self.v_proj = nn.Linear(config.hidden_size, config.num_key_value_heads * self.head_dim, bias=True)
-        self.o_proj = nn.Linear(config.num_attention_heads * self.head_dim, config.hidden_size, bias=False)
+        self.q_proj = nn.Linear(
+            config.hidden_size, config.num_attention_heads * self.head_dim, bias=True
+        )
+        self.k_proj = nn.Linear(
+            config.hidden_size, config.num_key_value_heads * self.head_dim, bias=True
+        )
+        self.v_proj = nn.Linear(
+            config.hidden_size, config.num_key_value_heads * self.head_dim, bias=True
+        )
+        self.o_proj = nn.Linear(
+            config.num_attention_heads * self.head_dim, config.hidden_size, bias=False
+        )
         if config.parscale_n > 1:
-            self.prefix_k = nn.Parameter(torch.empty((config.parscale_n, config.num_key_value_heads, config.parscale_n_tokens, self.head_dim)))
-            self.prefix_v = nn.Parameter(torch.empty((config.parscale_n, config.num_key_value_heads, config.parscale_n_tokens, self.head_dim)))
-
+            self.prefix_k = nn.Parameter(
+                torch.empty(
+                    (
+                        config.parscale_n,
+                        config.num_key_value_heads,
+                        config.parscale_n_tokens,
+                        self.head_dim,
+                    )
+                )
+            )
+            self.prefix_v = nn.Parameter(
+                torch.empty(
+                    (
+                        config.parscale_n,
+                        config.num_key_value_heads,
+                        config.parscale_n_tokens,
+                        self.head_dim,
+                    )
+                )
+            )
 
     def forward(
         self,
@@ -209,39 +257,83 @@ class Qwen2Attention(nn.Module):
         value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
 
         cos, sin = position_embeddings
-        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+        query_states, key_states = apply_rotary_pos_emb(
+            query_states, key_states, cos, sin
+        )
 
         if past_key_value is not None:
             # sin and cos are specific to RoPE models; cache_position needed for the static cache
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
-            key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
-        
+            key_states, value_states = past_key_value.update(
+                key_states, value_states, self.layer_idx, cache_kwargs
+            )
+
         # Cross-attention between same-position tokens across replicas
         use_cross_attn = (
-            self.config.parscale_n > 1 and
-            self.config.parscale_enable_cross_attn and 
-            (self.config.parscale_cross_attn_layers is None or 
-             self.layer_idx in self.config.parscale_cross_attn_layers)
+            self.config.parscale_n > 1
+            and self.config.enable_cross_attn
+            and (
+                self.config.parscale_cross_attn_layers is None
+                or self.layer_idx in self.config.parscale_cross_attn_layers
+            )
         )
-        
-        if self.config.parscale_n > 1:
 
+        if self.config.parscale_n > 1:
             # Expand attention mask to contain the prefix tokens
             n_virtual_tokens = self.config.parscale_n_tokens
 
             if attention_mask is not None:
-                attention_mask = torch.cat([
-                    torch.zeros((attention_mask.shape[0], attention_mask.shape[1], attention_mask.shape[2], self.config.parscale_n_tokens), dtype=attention_mask.dtype, device=attention_mask.device), 
-                    attention_mask
-                ], dim=3)
+                attention_mask = torch.cat(
+                    [
+                        torch.zeros(
+                            (
+                                attention_mask.shape[0],
+                                attention_mask.shape[1],
+                                attention_mask.shape[2],
+                                self.config.parscale_n_tokens,
+                            ),
+                            dtype=attention_mask.dtype,
+                            device=attention_mask.device,
+                        ),
+                        attention_mask,
+                    ],
+                    dim=3,
+                )
 
             if query_states.size(2) != 1:
-                query_states = torch.cat([torch.zeros([query_states.size(0), query_states.size(1), n_virtual_tokens, query_states.size(3)], dtype=query_states.dtype, device=query_states.device), query_states], dim=2)
+                query_states = torch.cat(
+                    [
+                        torch.zeros(
+                            [
+                                query_states.size(0),
+                                query_states.size(1),
+                                n_virtual_tokens,
+                                query_states.size(3),
+                            ],
+                            dtype=query_states.dtype,
+                            device=query_states.device,
+                        ),
+                        query_states,
+                    ],
+                    dim=2,
+                )
                 if attention_mask is not None:
-                    attention_mask = torch.cat([
-                        torch.zeros((attention_mask.shape[0], attention_mask.shape[1], self.config.parscale_n_tokens, attention_mask.shape[3]), dtype=attention_mask.dtype, device=attention_mask.device), 
-                        attention_mask
-                    ], dim=2)
+                    attention_mask = torch.cat(
+                        [
+                            torch.zeros(
+                                (
+                                    attention_mask.shape[0],
+                                    attention_mask.shape[1],
+                                    self.config.parscale_n_tokens,
+                                    attention_mask.shape[3],
+                                ),
+                                dtype=attention_mask.dtype,
+                                device=attention_mask.device,
+                            ),
+                            attention_mask,
+                        ],
+                        dim=2,
+                    )
 
             if use_cross_attn:
                 # Reshape to separate replica and batch dimensions
@@ -249,16 +341,32 @@ class Qwen2Attention(nn.Module):
                 seq_len = key_states.size(2)
 
                 # Reshape key and value states for cross-replica attention
-                key_states_cross = rearrange(key_states, '(p b) h s d -> b p h s d', p=self.config.parscale_n)
-                value_states_cross = rearrange(value_states, '(p b) h s d -> b p h s d', p=self.config.parscale_n)
+                key_states_cross = rearrange(
+                    key_states, "(p b) h s d -> b p h s d", p=self.config.parscale_n
+                )
+                value_states_cross = rearrange(
+                    value_states, "(p b) h s d -> b p h s d", p=self.config.parscale_n
+                )
 
                 # For each position, concatenate keys/values from all replicas
-                key_states_all_replicas = rearrange(key_states_cross, 'b p h s d -> b h s (p d)')
-                value_states_all_replicas = rearrange(value_states_cross, 'b p h s d -> b h s (p d)')
+                key_states_all_replicas = rearrange(
+                    key_states_cross, "b p h s d -> b h s (p d)"
+                )
+                value_states_all_replicas = rearrange(
+                    value_states_cross, "b p h s d -> b h s (p d)"
+                )
 
                 # Expand back to (parscale_n * batch_size) format for attention computation
-                key_states = repeat(key_states_all_replicas, 'b h s d -> (p b) h s d', p=self.config.parscale_n)
-                value_states = repeat(value_states_all_replicas, 'b h s d -> (p b) h s d', p=self.config.parscale_n)
+                key_states = repeat(
+                    key_states_all_replicas,
+                    "b h s d -> (p b) h s d",
+                    p=self.config.parscale_n,
+                )
+                value_states = repeat(
+                    value_states_all_replicas,
+                    "b h s d -> (p b) h s d",
+                    p=self.config.parscale_n,
+                )
 
         # Set flag to indicate cross-attention expansion
         self._cross_attn_expanded = use_cross_attn
@@ -273,13 +381,17 @@ class Qwen2Attention(nn.Module):
 
         attention_interface: Callable = eager_attention_forward
         if self.config._attn_implementation != "eager":
-            if self.config._attn_implementation == "sdpa" and kwargs.get("output_attentions", False):
+            if self.config._attn_implementation == "sdpa" and kwargs.get(
+                "output_attentions", False
+            ):
                 logger.warning_once(
                     "`torch.nn.functional.scaled_dot_product_attention` does not support `output_attentions=True`. Falling back to "
                     'eager attention. This warning can be removed using the argument `attn_implementation="eager"` when loading the model.'
                 )
             else:
-                attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
+                attention_interface = ALL_ATTENTION_FUNCTIONS[
+                    self.config._attn_implementation
+                ]
 
         attn_output, attn_weights = attention_interface(
             self,
@@ -297,29 +409,29 @@ class Qwen2Attention(nn.Module):
         if self.config.parscale_n > 1 and query_states.size(2) != 1:
             # Remove the prefix part
             attn_output = attn_output[:, n_virtual_tokens:]
-            
+
         # Handle cross-attention output projection
         if self.config.parscale_n > 1 and use_cross_attn:
             # attn_output shape: (parscale_n * batch_size, seq_len, parscale_n * num_heads * head_dim)
             # Need to project back to hidden_size and potentially aggregate across replicas
             attn_output_reshaped = attn_output.reshape(*input_shape, -1).contiguous()
-            
+
             # Project the expanded features back to hidden size
             # The o_proj expects hidden_size input, but we have parscale_n * hidden_size
             # We need to handle this dimension mismatch
             batch_seq_size = attn_output_reshaped.size(0) * attn_output_reshaped.size(1)
             expanded_features = attn_output_reshaped.view(batch_seq_size, -1)
-            
+
             # Simple linear projection to compress parscale_n * hidden_size -> hidden_size
-            if not hasattr(self, 'cross_attn_proj'):
+            if not hasattr(self, "cross_attn_proj"):
                 self.cross_attn_proj = nn.Linear(
                     self.config.parscale_n * self.config.hidden_size,
                     self.config.hidden_size,
                     bias=False,
                     device=expanded_features.device,
-                    dtype=expanded_features.dtype
+                    dtype=expanded_features.dtype,
                 )
-            
+
             projected_output = self.cross_attn_proj(expanded_features)
             attn_output = projected_output.view(*input_shape, self.config.hidden_size)
         else:
@@ -355,7 +467,9 @@ class Qwen2DecoderLayer(nn.Module):
         self.self_attn = Qwen2Attention(config=config, layer_idx=layer_idx)
         self.mlp = Qwen2MLP(config)
         self.input_layernorm = Qwen2RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.post_attention_layernorm = Qwen2RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.post_attention_layernorm = Qwen2RMSNorm(
+            config.hidden_size, eps=config.rms_norm_eps
+        )
         if config.sliding_window and config._attn_implementation != "flash_attention_2":
             logger.warning_once(
                 f"Sliding Window Attention is enabled but not implemented for `{config._attn_implementation}`; "
@@ -371,9 +485,13 @@ class Qwen2DecoderLayer(nn.Module):
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = False,
         cache_position: Optional[torch.LongTensor] = None,
-        position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,  # necessary, but kept here for BC
+        position_embeddings: Optional[
+            Tuple[torch.Tensor, torch.Tensor]
+        ] = None,  # necessary, but kept here for BC
         **kwargs: Unpack[FlashAttentionKwargs],
-    ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
+    ) -> Tuple[
+        torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]
+    ]:
         residual = hidden_states
 
         hidden_states = self.input_layernorm(hidden_states)
@@ -410,7 +528,9 @@ class Qwen2RotaryEmbedding(nn.Module):
         super().__init__()
         # BC: "rope_type" was originally "type"
         if hasattr(config, "rope_scaling") and config.rope_scaling is not None:
-            self.rope_type = config.rope_scaling.get("rope_type", config.rope_scaling.get("type"))
+            self.rope_type = config.rope_scaling.get(
+                "rope_type", config.rope_scaling.get("type")
+            )
         else:
             self.rope_type = "default"
         self.max_seq_len_cached = config.max_position_embeddings
@@ -431,11 +551,18 @@ class Qwen2RotaryEmbedding(nn.Module):
         """
         seq_len = torch.max(position_ids) + 1
         if seq_len > self.max_seq_len_cached:  # growth
-            inv_freq, self.attention_scaling = self.rope_init_fn(self.config, device, seq_len=seq_len)
-            self.register_buffer("inv_freq", inv_freq, persistent=False)  # TODO joao: may break with compilation
+            inv_freq, self.attention_scaling = self.rope_init_fn(
+                self.config, device, seq_len=seq_len
+            )
+            self.register_buffer(
+                "inv_freq", inv_freq, persistent=False
+            )  # TODO joao: may break with compilation
             self.max_seq_len_cached = seq_len
 
-        if seq_len < self.original_max_seq_len and self.max_seq_len_cached > self.original_max_seq_len:  # reset
+        if (
+            seq_len < self.original_max_seq_len
+            and self.max_seq_len_cached > self.original_max_seq_len
+        ):  # reset
             # This .to() is needed if the model has been moved to a device after being initialized (because
             # the buffer is automatically moved, but not the original copy)
             self.original_inv_freq = self.original_inv_freq.to(device)
@@ -448,13 +575,21 @@ class Qwen2RotaryEmbedding(nn.Module):
             self._dynamic_frequency_update(position_ids, device=x.device)
 
         # Core RoPE block
-        inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
+        inv_freq_expanded = (
+            self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
+        )
         position_ids_expanded = position_ids[:, None, :].float()
         # Force float32 (see https://github.com/huggingface/transformers/pull/29285)
         device_type = x.device.type
-        device_type = device_type if isinstance(device_type, str) and device_type != "mps" else "cpu"
+        device_type = (
+            device_type
+            if isinstance(device_type, str) and device_type != "mps"
+            else "cpu"
+        )
         with torch.autocast(device_type=device_type, enabled=False):
-            freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
+            freqs = (
+                inv_freq_expanded.float() @ position_ids_expanded.float()
+            ).transpose(1, 2)
             emb = torch.cat((freqs, freqs), dim=-1)
             cos = emb.cos()
             sin = emb.sin()
@@ -604,9 +739,14 @@ class Qwen2Model(Qwen2PreTrainedModel):
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
 
-        self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
+        self.embed_tokens = nn.Embedding(
+            config.vocab_size, config.hidden_size, self.padding_idx
+        )
         self.layers = nn.ModuleList(
-            [Qwen2DecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
+            [
+                Qwen2DecoderLayer(config, layer_idx)
+                for layer_idx in range(config.num_hidden_layers)
+            ]
         )
         self.norm = Qwen2RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.rotary_emb = Qwen2RotaryEmbedding(config=config)
@@ -615,9 +755,11 @@ class Qwen2Model(Qwen2PreTrainedModel):
         self.parscale_n = config.parscale_n
         if config.parscale_n > 1:
             self.aggregate_layer = torch.nn.Sequential(
-                torch.nn.Linear(config.parscale_n * config.hidden_size, config.hidden_size),
+                torch.nn.Linear(
+                    config.parscale_n * config.hidden_size, config.hidden_size
+                ),
                 torch.nn.SiLU(),
-                torch.nn.Linear(config.hidden_size, config.parscale_n)
+                torch.nn.Linear(config.hidden_size, config.parscale_n),
             )
         self.parscale_aggregate_attn_smoothing = config.parscale_attn_smooth
 
@@ -645,15 +787,25 @@ class Qwen2Model(Qwen2PreTrainedModel):
         cache_position: Optional[torch.LongTensor] = None,
         **flash_attn_kwargs: Unpack[FlashAttentionKwargs],
     ) -> Union[Tuple, BaseModelOutputWithPast]:
-        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+        output_attentions = (
+            output_attentions
+            if output_attentions is not None
+            else self.config.output_attentions
+        )
         output_hidden_states = (
-            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+            output_hidden_states
+            if output_hidden_states is not None
+            else self.config.output_hidden_states
         )
         use_cache = use_cache if use_cache is not None else self.config.use_cache
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        return_dict = (
+            return_dict if return_dict is not None else self.config.use_return_dict
+        )
 
         if (input_ids is None) ^ (inputs_embeds is not None):
-            raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
+            raise ValueError(
+                "You must specify exactly one of input_ids or inputs_embeds"
+            )
 
         if self.gradient_checkpointing and self.training and use_cache:
             logger.warning_once(
@@ -663,35 +815,54 @@ class Qwen2Model(Qwen2PreTrainedModel):
 
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
-        
+
         if self.parscale_n > 1:
-            # Input transformation: we directly copy the input for n_parscale times. 
+            # Input transformation: we directly copy the input for n_parscale times.
             # The transformation is implemented through KVCache (ParscaleCache).
-            inputs_embeds = repeat(inputs_embeds, "b s h -> (n_parscale b) s h", n_parscale=self.parscale_n)
+            inputs_embeds = repeat(
+                inputs_embeds, "b s h -> (n_parscale b) s h", n_parscale=self.parscale_n
+            )
             if attention_mask is not None:
-                attention_mask = repeat(attention_mask, "b s -> (n_parscale b) s", n_parscale=self.parscale_n)
+                attention_mask = repeat(
+                    attention_mask,
+                    "b s -> (n_parscale b) s",
+                    n_parscale=self.parscale_n,
+                )
             if position_ids is not None:
-                position_ids = repeat(position_ids, "b s -> (n_parscale b) s", n_parscale=self.parscale_n)
-            
+                position_ids = repeat(
+                    position_ids, "b s -> (n_parscale b) s", n_parscale=self.parscale_n
+                )
+
             # The trained prefix is saved in layer.self_attn.prefix_k / layer.self_attn.prefix_v
             # We extract them to construct ParscaleCache.
             if past_key_values is None or past_key_values.get_seq_length() == 0:
-                past_key_values = ParscaleCache([layer.self_attn.prefix_k for layer in self.layers], [layer.self_attn.prefix_v for layer in self.layers])
+                past_key_values = ParscaleCache(
+                    [layer.self_attn.prefix_k for layer in self.layers],
+                    [layer.self_attn.prefix_v for layer in self.layers],
+                )
 
         if use_cache and past_key_values is None:
             past_key_values = DynamicCache()
 
         if cache_position is None:
-            past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
+            past_seen_tokens = (
+                past_key_values.get_seq_length() if past_key_values is not None else 0
+            )
             cache_position = torch.arange(
-                past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], device=inputs_embeds.device
+                past_seen_tokens,
+                past_seen_tokens + inputs_embeds.shape[1],
+                device=inputs_embeds.device,
             )
 
         if position_ids is None:
             position_ids = cache_position.unsqueeze(0)
 
         causal_mask = self._update_causal_mask(
-            attention_mask, inputs_embeds, cache_position, past_key_values, output_attentions
+            attention_mask,
+            inputs_embeds,
+            cache_position,
+            past_key_values,
+            output_attentions,
         )
 
         hidden_states = inputs_embeds
@@ -741,14 +912,32 @@ class Qwen2Model(Qwen2PreTrainedModel):
 
         if self.parscale_n > 1:
             # output aggregation, based on dynamic weighted sum.
-            attn = torch.unsqueeze(torch.softmax(self.aggregate_layer(
-                rearrange(hidden_states, "(n_parscale b) s h -> b s (h n_parscale)", n_parscale=self.parscale_n)
-            ).float(), dim=-1), dim=-1) # [b s n_parscale 1]
+            attn = torch.unsqueeze(
+                torch.softmax(
+                    self.aggregate_layer(
+                        rearrange(
+                            hidden_states,
+                            "(n_parscale b) s h -> b s (h n_parscale)",
+                            n_parscale=self.parscale_n,
+                        )
+                    ).float(),
+                    dim=-1,
+                ),
+                dim=-1,
+            )  # [b s n_parscale 1]
             if self.parscale_aggregate_attn_smoothing != 0.0:
-                attn = attn * (1 - self.parscale_aggregate_attn_smoothing) + (self.parscale_aggregate_attn_smoothing / self.parscale_n)
+                attn = attn * (1 - self.parscale_aggregate_attn_smoothing) + (
+                    self.parscale_aggregate_attn_smoothing / self.parscale_n
+                )
             hidden_states = torch.sum(
-                rearrange(hidden_states, "(n_parscale b) s h -> b s n_parscale h", n_parscale=self.parscale_n) * attn, 
-                dim=2, keepdim=False
+                rearrange(
+                    hidden_states,
+                    "(n_parscale b) s h -> b s n_parscale h",
+                    n_parscale=self.parscale_n,
+                )
+                * attn,
+                dim=2,
+                keepdim=False,
             ).to(hidden_states.dtype)
 
         # add hidden states from the last decoder layer
@@ -779,11 +968,17 @@ class Qwen2Model(Qwen2PreTrainedModel):
         # For SDPA, when possible, we will rely on its `is_causal` argument instead of its `attn_mask` argument, in
         # order to dispatch on Flash Attention 2. This feature is not compatible with static cache, as SDPA will fail
         # to infer the attention mask.
-        past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
+        past_seen_tokens = (
+            past_key_values.get_seq_length() if past_key_values is not None else 0
+        )
         using_static_cache = isinstance(past_key_values, StaticCache)
 
         # When output attentions is True, sdpa implementation's forward method calls the eager implementation's forward
-        if self.config._attn_implementation == "sdpa" and not using_static_cache and not output_attentions:
+        if (
+            self.config._attn_implementation == "sdpa"
+            and not using_static_cache
+            and not output_attentions
+        ):
             if AttentionMaskConverter._ignore_causal_mask_sdpa(
                 attention_mask,
                 inputs_embeds=input_tensor,
@@ -823,7 +1018,9 @@ class Qwen2Model(Qwen2PreTrainedModel):
             # using left padding. This is required by F.scaled_dot_product_attention memory-efficient attention path.
             # Details: https://github.com/pytorch/pytorch/issues/110213
             min_dtype = torch.finfo(dtype).min
-            causal_mask = AttentionMaskConverter._unmask_unattended(causal_mask, min_dtype)
+            causal_mask = AttentionMaskConverter._unmask_unattended(
+                causal_mask, min_dtype
+            )
 
         return causal_mask
 
@@ -866,20 +1063,30 @@ class Qwen2Model(Qwen2PreTrainedModel):
         else:
             min_dtype = torch.finfo(dtype).min
             causal_mask = torch.full(
-                (sequence_length, target_length), fill_value=min_dtype, dtype=dtype, device=device
+                (sequence_length, target_length),
+                fill_value=min_dtype,
+                dtype=dtype,
+                device=device,
             )
             if sequence_length != 1:
                 causal_mask = torch.triu(causal_mask, diagonal=1)
-            causal_mask *= torch.arange(target_length, device=device) > cache_position.reshape(-1, 1)
+            causal_mask *= torch.arange(
+                target_length, device=device
+            ) > cache_position.reshape(-1, 1)
             causal_mask = causal_mask[None, None, :, :].expand(batch_size, 1, -1, -1)
             if attention_mask is not None:
-                causal_mask = causal_mask.clone()  # copy to contiguous memory for in-place edit
+                causal_mask = (
+                    causal_mask.clone()
+                )  # copy to contiguous memory for in-place edit
                 mask_length = attention_mask.shape[-1]
-                padding_mask = causal_mask[:, :, :, :mask_length] + attention_mask[:, None, None, :]
-                padding_mask = padding_mask == 0
-                causal_mask[:, :, :, :mask_length] = causal_mask[:, :, :, :mask_length].masked_fill(
-                    padding_mask, min_dtype
+                padding_mask = (
+                    causal_mask[:, :, :, :mask_length]
+                    + attention_mask[:, None, None, :]
                 )
+                padding_mask = padding_mask == 0
+                causal_mask[:, :, :, :mask_length] = causal_mask[
+                    :, :, :, :mask_length
+                ].masked_fill(padding_mask, min_dtype)
 
         return causal_mask
 
@@ -919,7 +1126,9 @@ class Qwen2ParScaleForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
         return self.model
 
     @add_start_docstrings_to_model_forward(QWEN2_INPUTS_DOCSTRING)
-    @replace_return_docstrings(output_type=CausalLMOutputWithPast, config_class=_CONFIG_FOR_DOC)
+    @replace_return_docstrings(
+        output_type=CausalLMOutputWithPast, config_class=_CONFIG_FOR_DOC
+    )
     def forward(
         self,
         input_ids: torch.LongTensor = None,
@@ -966,11 +1175,19 @@ class Qwen2ParScaleForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
         >>> tokenizer.batch_decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
         "Hey, are you conscious? Can you talk to me?\nI'm not conscious, but I can talk to you."
         ```"""
-        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-        output_hidden_states = (
-            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+        output_attentions = (
+            output_attentions
+            if output_attentions is not None
+            else self.config.output_attentions
         )
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        output_hidden_states = (
+            output_hidden_states
+            if output_hidden_states is not None
+            else self.config.output_hidden_states
+        )
+        return_dict = (
+            return_dict if return_dict is not None else self.config.use_return_dict
+        )
 
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
         outputs = self.model(
@@ -993,7 +1210,12 @@ class Qwen2ParScaleForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
 
         loss = None
         if labels is not None:
-            loss = self.loss_function(logits=logits, labels=labels, vocab_size=self.config.vocab_size, **kwargs)
+            loss = self.loss_function(
+                logits=logits,
+                labels=labels,
+                vocab_size=self.config.vocab_size,
+                **kwargs,
+            )
 
         if not return_dict:
             output = (logits,) + outputs[1:]
@@ -1059,7 +1281,9 @@ class Qwen2ForSequenceClassification(Qwen2PreTrainedModel):
             config.num_labels - 1]`. If `config.num_labels == 1` a regression loss is computed (Mean-Square loss), If
             `config.num_labels > 1` a classification loss is computed (Cross-Entropy).
         """
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        return_dict = (
+            return_dict if return_dict is not None else self.config.use_return_dict
+        )
 
         transformer_outputs = self.model(
             input_ids,
@@ -1081,23 +1305,34 @@ class Qwen2ForSequenceClassification(Qwen2PreTrainedModel):
             batch_size = inputs_embeds.shape[0]
 
         if self.config.pad_token_id is None and batch_size != 1:
-            raise ValueError("Cannot handle batch sizes > 1 if no padding token is defined.")
+            raise ValueError(
+                "Cannot handle batch sizes > 1 if no padding token is defined."
+            )
         if self.config.pad_token_id is None:
             sequence_lengths = -1
         else:
             if input_ids is not None:
                 # if no pad token found, use modulo instead of reverse indexing for ONNX compatibility
-                sequence_lengths = torch.eq(input_ids, self.config.pad_token_id).int().argmax(-1) - 1
+                sequence_lengths = (
+                    torch.eq(input_ids, self.config.pad_token_id).int().argmax(-1) - 1
+                )
                 sequence_lengths = sequence_lengths % input_ids.shape[-1]
                 sequence_lengths = sequence_lengths.to(logits.device)
             else:
                 sequence_lengths = -1
 
-        pooled_logits = logits[torch.arange(batch_size, device=logits.device), sequence_lengths]
+        pooled_logits = logits[
+            torch.arange(batch_size, device=logits.device), sequence_lengths
+        ]
 
         loss = None
         if labels is not None:
-            loss = self.loss_function(logits=logits, labels=labels, pooled_logits=pooled_logits, config=self.config)
+            loss = self.loss_function(
+                logits=logits,
+                labels=labels,
+                pooled_logits=pooled_logits,
+                config=self.config,
+            )
 
         if not return_dict:
             output = (pooled_logits,) + transformer_outputs[1:]
@@ -1167,7 +1402,9 @@ class Qwen2ForTokenClassification(Qwen2PreTrainedModel):
             config.num_labels - 1]`. If `config.num_labels == 1` a regression loss is computed (Mean-Square loss), If
             `config.num_labels > 1` a classification loss is computed (Cross-Entropy).
         """
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        return_dict = (
+            return_dict if return_dict is not None else self.config.use_return_dict
+        )
 
         outputs = self.model(
             input_ids,
@@ -1249,7 +1486,9 @@ class Qwen2ForQuestionAnswering(Qwen2PreTrainedModel):
             Positions are clamped to the length of the sequence (`sequence_length`). Position outside of the sequence
             are not taken into account for computing the loss.
         """
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        return_dict = (
+            return_dict if return_dict is not None else self.config.use_return_dict
+        )
 
         outputs = self.transformer(
             input_ids,
@@ -1271,7 +1510,9 @@ class Qwen2ForQuestionAnswering(Qwen2PreTrainedModel):
 
         loss = None
         if start_positions is not None and end_positions is not None:
-            loss = self.loss_function(start_logits, end_logits, start_positions, end_positions, **kwargs)
+            loss = self.loss_function(
+                start_logits, end_logits, start_positions, end_positions, **kwargs
+            )
 
         if not return_dict:
             output = (start_logits, end_logits) + outputs[2:]

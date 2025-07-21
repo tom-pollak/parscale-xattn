@@ -1,0 +1,5 @@
+parscale:
+  parscale_n: 1
+
+training:
+  output_dir: "./models/basic"

@@ -29,36 +29,24 @@ uv run python train.py --config-path=configs --config-name=cross_attn parscale.p
 #### Multi-GPU (8 GPUs with FSDP)
 ```bash
 # Basic ParScale training with 8 GPUs
-torchrun --nproc_per_node=8 train.py \
-  --config-path=configs --config-name=basic \
+CONFIG_FILE=configs/basic.yaml torchrun --nproc_per_node=8 train.py \
   parscale.parscale_n=4 \
   training.per_device_train_batch_size=1 \
   training.gradient_accumulation_steps=16
 
 # Cross-attention with 8 GPUs
-torchrun --nproc_per_node=8 train.py \
-  --config-path=configs --config-name=cross_attn \
+CONFIG_FILE=configs/cross_attn.yaml torchrun --nproc_per_node=8 train.py \
   parscale.parscale_n=4 \
   training.per_device_train_batch_size=1 \
   training.gradient_accumulation_steps=16
 
 # Larger model (Qwen2-7B) with selective cross-attention
-torchrun --nproc_per_node=8 train.py \
-  --config-path=configs --config-name=cross_attn \
+CONFIG_FILE=configs/cross_attn.yaml torchrun --nproc_per_node=8 train.py \
   training.base_model=Qwen/Qwen2-7B \
   parscale.parscale_n=8 \
   parscale.parscale_cross_attn_layers=[0,4,8,12,16,20,24,28] \
   training.per_device_train_batch_size=1 \
   training.gradient_accumulation_steps=32
-```
-
-#### Configuration Overrides
-```bash
-# Custom output directory and training parameters
-uv run python train.py --config-path=configs --config-name=basic \
-  training.output_dir=./my-model \
-  training.learning_rate=3e-5 \
-  parscale.parscale_n=2
 ```
 
 ### Hyperparameter Sweeps with Wandb
@@ -74,7 +62,7 @@ wandb agent <sweep_id>
 python wandb_sweep.py create parscale_scaling
 wandb agent <sweep_id>
 
-# 3. Cross-attention on all layers with P=1,2,4,8 (4 runs)  
+# 3. Cross-attention on all layers with P=1,2,4,8 (4 runs)
 python wandb_sweep.py create xattn_all_layers
 wandb agent <sweep_id>
 
@@ -85,7 +73,7 @@ wandb agent <sweep_id>
 
 **Sweep Descriptions:**
 - `lr_verification`: Tests learning rates [1e-4, 3e-4, 5e-4, 1e-3] with P=1 and P=4 to verify optimal LR
-- `parscale_scaling`: Replicates original paper's P=1,2,4,8 scaling experiments 
+- `parscale_scaling`: Replicates original paper's P=1,2,4,8 scaling experiments
 - `xattn_all_layers`: Same scaling but with cross-attention enabled on all layers
 - `xattn_preset_layers`: Same scaling but with cross-attention on layers [0,6,12,18] only
 
@@ -128,14 +116,14 @@ The training script follows the original ParScale paper's hyperparameters for co
 The training approach converts an existing Qwen2 model to ParScale format and continues training with newly initialized ParScale parameters (prefix tokens + optional cross-attention), similar to the paper's two-stage strategy where Stage 2 adds ParScale to an already-trained model.
 
 **Configuration Files:**
-- `configs/basic.yaml`: Standard ParScale training 
+- `configs/basic.yaml`: Standard ParScale training
 - `configs/cross_attn.yaml`: Cross-attention enabled
 
 ### Model Configuration Parameters
 
 - `parscale_n` (int, default: 1): Number of parallel replicas
-- `parscale_n_tokens` (int, default: 48): Number of prefix tokens for cross-replica communication  
-- `parscale_enable_cross_attn` (bool, default: False): Enable cross-attention between same-position tokens across replicas
+- `parscale_n_tokens` (int, default: 48): Number of prefix tokens for cross-replica communication
+- `enable_cross_attn` (bool, default: False): Enable cross-attention between same-position tokens across replicas
 - `parscale_cross_attn_layers` (list[int], default: None): Layer indices where cross-attention is enabled. If None, applies to all layers when cross-attention is enabled
 
 ### Direct Model Usage
@@ -144,13 +132,13 @@ The training approach converts an existing Qwen2 model to ParScale format and co
 from parscale_xattn import Qwen2ParScaleForCausalLM, Qwen2ParScaleConfig
 
 # Standard ParScale without cross-attention (original behavior)
-config = Qwen2ParScaleConfig(parscale_n=4, parscale_enable_cross_attn=False)
+config = Qwen2ParScaleConfig(parscale_n=4, enable_cross_attn=False)
 model = Qwen2ParScaleForCausalLM(config)
 
-# ParScale with cross-attention on specific layers only  
+# ParScale with cross-attention on specific layers only
 config = Qwen2ParScaleConfig(
     parscale_n=4,
-    parscale_enable_cross_attn=True,
+    enable_cross_attn=True,
     parscale_cross_attn_layers=[0, 4, 8, 12]
 )
 model = Qwen2ParScaleForCausalLM(config)
@@ -168,7 +156,7 @@ When cross-attention is enabled:
 
 ### Backward Compatibility
 
-- **Default Behavior**: `parscale_enable_cross_attn=False` ensures no behavior change from original ParScale
+- **Default Behavior**: `enable_cross_attn=False` ensures no behavior change from original ParScale
 - **Existing Models**: All existing ParScale functionality is preserved
 - **Gradual Adoption**: Can be enabled on specific layers for controlled experimentation
 

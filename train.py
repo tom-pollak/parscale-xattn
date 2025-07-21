@@ -1,12 +1,10 @@
-#!/usr/bin/env python3
-"""Simple training script for ParScale Cross-Attention using OmegaConf + Pydantic."""
-
 import os
 from typing import Literal, Optional
 
 import torch
+import wandb
 from datasets import load_dataset
-from omegaconf import OmegaConf
+from omegaconf import OmegaConf, SCMode
 from pydantic import BaseModel
 from transformers import (
     AutoModelForCausalLM,
@@ -22,7 +20,7 @@ from src.parscale_xattn import Qwen2ParScaleConfig, Qwen2ParScaleForCausalLM
 class ParScaleConfig(BaseModel):
     parscale_n: int = 4
     parscale_n_tokens: int = 48
-    parscale_enable_cross_attn: bool = False
+    enable_cross_attn: bool = False
     parscale_cross_attn_layers: Optional[list[int]] = None
 
 
@@ -73,7 +71,7 @@ def convert_qwen2_to_parscale(
         rope_theta=getattr(base_config, "rope_theta", 10000.0),
         parscale_n=parscale_config.parscale_n,
         parscale_n_tokens=parscale_config.parscale_n_tokens,
-        parscale_enable_cross_attn=parscale_config.parscale_enable_cross_attn,
+        enable_cross_attn=parscale_config.enable_cross_attn,
         parscale_cross_attn_layers=parscale_config.parscale_cross_attn_layers,
     )
 
@@ -136,19 +134,33 @@ def proc_dataset(dataset_name: Literal["stack", "pile"]):
             raise ValueError("invalid name", dataset_name)
 
 
-def main():
+def mk_config() -> Config:
     if not (config_file := os.environ.get("CONFIG_FILE")):
         raise ValueError("CONFIG_FILE env var not set!")
 
     base_config: Config = OmegaConf.structured(Config)
     yaml_config = OmegaConf.load(config_file)
     cli_config = OmegaConf.from_cli()
+    wandb_config = OmegaConf.create(wandb.config)
 
-    config: Config = OmegaConf.merge(base_config, yaml_config, cli_config)
+    config = OmegaConf.merge(
+        base_config,
+        yaml_config,
+        cli_config,
+        wandb_config,  # sweep config
+    )
+    config = OmegaConf.to_container(config, structured_config_mode=SCMode.DICT)
 
+    config = Config.model_validate(config)
     print(f"####\n{config.to_yaml()}\n####")
+    return config
 
-    # Setup
+
+def main():
+    wandb.init(project=os.environ["WANDB_PROJECT"])
+
+    config = mk_config()
+
     tokenizer = AutoTokenizer.from_pretrained(config.training.base_model)
     model = convert_qwen2_to_parscale(config.training.base_model, config.parscale)
     dataset = proc_dataset(config.training.dataset)
@@ -171,7 +183,7 @@ def main():
         bf16=torch.cuda.is_available(),
         gradient_checkpointing=True,
         remove_unused_columns=False,
-        report_to="wandb" if "WANDB_PROJECT" in os.environ else None,
+        report_to="wandb",
         # Learning rate schedule - constant with warmup like paper's stage 2
         lr_scheduler_type="constant_with_warmup",
         # Multi-GPU setup
@@ -196,4 +208,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
