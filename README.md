@@ -37,10 +37,10 @@ pip install -e .
 CONFIG_FILE=configs/parscale.yaml uv run accelerate launch train.py
 
 # ParScale with 4 replicas
-CONFIG_FILE=configs/parscale.yaml uv run accelerate launch  train.py --parscale.parscale_n=4
+CONFIG_FILE=configs/parscale.yaml uv run accelerate launch train.py --parscale.parscale_n=4
 
 # Cross-attention enabled with 4 replicas
-CONFIG_FILE=configs/cross_attn.yaml uv run accelerate launch  train.py --parscale.parscale_n=4
+CONFIG_FILE=configs/cross_attn.yaml uv run accelerate launch train.py --parscale.parscale_n=4
 ```
 
 #### Multi-GPU (8 GPUs with FSDP)
