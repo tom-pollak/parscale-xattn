@@ -74,7 +74,7 @@ def convert_qwen2_to_parscale(
         max_position_embeddings=base_config.max_position_embeddings,
         initializer_range=base_config.initializer_range,
         rms_norm_eps=base_config.rms_norm_eps,
-        use_cache=False,  # Disable KV caching during training - only needed for inference
+        use_cache=base_config.use_cache,  # Disable KV caching during training - only needed for inference
         tie_word_embeddings=getattr(base_config, "tie_word_embeddings", False),
         rope_theta=getattr(base_config, "rope_theta", 10000.0),
         parscale_n=parscale_config.parscale_n,

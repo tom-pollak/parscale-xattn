@@ -167,16 +167,8 @@ class ParscaleCache(DynamicCache):
             # first time generation - expand cache from (parscale_n, heads, seq, dim)
             # to (parscale_n * batch_size, heads, seq, dim)
             batch_size = key_states.size(0) // self.parscale_n
-            self.key_cache[layer_idx] = repeat(
-                self.key_cache[layer_idx],
-                "p h s d -> (p b) h s d",
-                b=batch_size,
-            )
-            self.value_cache[layer_idx] = repeat(
-                self.value_cache[layer_idx],
-                "p h s d -> (p b) h s d",
-                b=batch_size,
-            )
+            self.key_cache[layer_idx] = self.key_cache[layer_idx].repeat(batch_size, 1, 1, 1)
+            self.value_cache[layer_idx] = self.value_cache[layer_idx].repeat(batch_size, 1, 1, 1)
         return super().update(key_states, value_states, layer_idx, cache_kwargs)
 
     def get_seq_length(self, layer_idx=0):
@@ -361,8 +353,7 @@ class Qwen2Attention(nn.Module):
 
         # Cross-attention between same-position tokens across replicas
         use_cross_attn = (
-            self.config.parscale_n > 1
-            and self.config.enable_cross_attn
+            self.config.enable_cross_attn
             and (
                 self.config.parscale_cross_attn_layers is None
                 or self.layer_idx in self.config.parscale_cross_attn_layers
