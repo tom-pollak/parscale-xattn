@@ -71,7 +71,7 @@ def convert_qwen2_to_parscale(
     )
     config = Qwen2ParScaleConfig(**config_dict)
 
-    parscale_model = Qwen2ParScaleForCausalLM(config)
+    parscale_model = Qwen2ParScaleForCausalLM(config).to(torch.bfloat16)
 
     # Copy weights
     parscale_model.model.embed_tokens.load_state_dict(

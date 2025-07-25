@@ -278,8 +278,7 @@ class Qwen2Attention(nn.Module):
                         config.num_key_value_heads,
                         config.parscale_n_tokens,
                         self.head_dim,
-                    ),
-                    dtype=torch.bfloat16,
+                    )
                 )
             )
             self.prefix_v = nn.Parameter(
@@ -289,8 +288,7 @@ class Qwen2Attention(nn.Module):
                         config.num_key_value_heads,
                         config.parscale_n_tokens,
                         self.head_dim,
-                    ),
-                    dtype=torch.bfloat16,
+                    )
                 )
             )
 
