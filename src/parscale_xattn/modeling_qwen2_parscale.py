@@ -957,9 +957,11 @@ class Qwen2Model(Qwen2PreTrainedModel):
             past_seen_tokens = (
                 past_key_values.get_seq_length() if past_key_values is not None else 0
             )
+            # Adjust cache_position to account for parscale_n_tokens if ParscaleCache is used
+            offset = self.config.parscale_n_tokens if isinstance(past_key_values, ParscaleCache) else 0
             cache_position = torch.arange(
-                past_seen_tokens,
-                past_seen_tokens + inputs_embeds.shape[1],
+                past_seen_tokens + offset,
+                past_seen_tokens + offset + inputs_embeds.shape[1],
                 device=inputs_embeds.device,
             )
 
