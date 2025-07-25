@@ -31,7 +31,7 @@ class ParScaleConfig:
 
 @dataclass
 class TrainingConfig:
-    base_model: str = "Qwen/Qwen2-0.7B"
+    base_model: str = "Qwen/Qwen2.5-0.5B"
     dataset: str = "pajama"
     output_dir: str = "./parscale-model"
     max_length: int = 2048
