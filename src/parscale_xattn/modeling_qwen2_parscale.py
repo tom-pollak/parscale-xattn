@@ -937,10 +937,8 @@ class Qwen2Model(Qwen2PreTrainedModel):
 
             # The trained prefix is saved in layer.self_attn.prefix_k / layer.self_attn.prefix_v
             # We extract them to construct ParscaleCache.
-            if (
-                self.config.parscale_n_tokens > 0
-                and past_key_values is None
-                or past_key_values.get_seq_length() == 0
+            if self.config.parscale_n_tokens > 0 and (
+                past_key_values is None or past_key_values.get_seq_length() == 0
             ):
                 past_key_values = ParscaleCache(
                     [layer.self_attn.prefix_k for layer in self.layers],
@@ -958,8 +956,14 @@ class Qwen2Model(Qwen2PreTrainedModel):
                 past_key_values.get_seq_length() if past_key_values is not None else 0
             )
             # Adjust cache_position to account for parscale_n_tokens if ParscaleCache is used
-            offset = self.config.parscale_n_tokens if isinstance(past_key_values, ParscaleCache) else 0
-            print(f"DEBUG: past_seen_tokens={past_seen_tokens}, offset={offset}, inputs_embeds.shape[1]={inputs_embeds.shape[1]}")
+            offset = (
+                self.config.parscale_n_tokens
+                if isinstance(past_key_values, ParscaleCache)
+                else 0
+            )
+            print(
+                f"DEBUG: past_seen_tokens={past_seen_tokens}, offset={offset}, inputs_embeds.shape[1]={inputs_embeds.shape[1]}"
+            )
             cache_position = torch.arange(
                 past_seen_tokens + offset,
                 past_seen_tokens + offset + inputs_embeds.shape[1],
