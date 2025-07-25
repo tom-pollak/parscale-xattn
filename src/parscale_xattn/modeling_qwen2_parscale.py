@@ -38,6 +38,17 @@ from .configuration_qwen2_parscale import Qwen2ParScaleConfig
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 
+def _replicate_if_dtensor(tensor_to_replicate, reference_tensor):
+    if isinstance(reference_tensor, DTensor):
+        return DTensor.from_local(
+            tensor_to_replicate.to(reference_tensor.device),
+            reference_tensor.device_mesh,
+            [Replicate()] * reference_tensor.device_mesh.ndim,
+            run_check=False
+        )
+    return tensor_to_replicate
+
+
 logger = logging.get_logger(__name__)
 
 _CHECKPOINT_FOR_DOC = "meta-qwen2/Qwen2-2-7b-hf"
@@ -171,11 +182,10 @@ class ParscaleCache(DynamicCache):
             self.key_cache[layer_idx] = self.key_cache[layer_idx].repeat(batch_size, 1, 1, 1)
             self.value_cache[layer_idx] = self.value_cache[layer_idx].repeat(batch_size, 1, 1, 1)
 
+        from torch.distributed.tensor import DTensor
         if isinstance(key_states, DTensor) and not isinstance(self.key_cache[layer_idx], DTensor):
-            device_mesh = key_states.device_mesh
-            placements = [Replicate()] * device_mesh.ndim
-            self.key_cache[layer_idx] = DTensor.from_local(self.key_cache[layer_idx].to(key_states.device), device_mesh, placements, run_check=False)
-            self.value_cache[layer_idx] = DTensor.from_local(self.value_cache[layer_idx].to(value_states.device), device_mesh, placements, run_check=False)
+            self.key_cache[layer_idx] = _replicate_if_dtensor(self.key_cache[layer_idx], key_states)
+            self.value_cache[layer_idx] = _replicate_if_dtensor(self.value_cache[layer_idx], value_states)
 
         return super().update(key_states, value_states, layer_idx, cache_kwargs)
 
@@ -370,59 +380,46 @@ class Qwen2Attention(nn.Module):
 
         if self.config.parscale_n > 1 and self.config.parscale_n_tokens > 0:
             # Expand attention mask to contain the prefix tokens
-
             if attention_mask is not None:
-                attention_mask = torch.cat(
-                    [
-                        torch.zeros(
-                            (
-                                attention_mask.shape[0],
-                                attention_mask.shape[1],
-                                attention_mask.shape[2],
-                                self.config.parscale_n_tokens,
-                            ),
-                            dtype=attention_mask.dtype,
-                            device=attention_mask.device,
-                        ),
-                        attention_mask,
-                    ],
-                    dim=3,
+                prefix_mask = torch.zeros(
+                    (
+                        attention_mask.shape[0],
+                        attention_mask.shape[1],
+                        attention_mask.shape[2],
+                        self.config.parscale_n_tokens,
+                    ),
+                    dtype=attention_mask.dtype,
+                    device=attention_mask.device,
                 )
+                prefix_mask = _replicate_if_dtensor(prefix_mask, attention_mask)
+                attention_mask = torch.cat([prefix_mask, attention_mask], dim=3)
 
             if query_states.size(2) != 1:
-                query_states = torch.cat(
+                prefix_query = torch.zeros(
                     [
-                        torch.zeros(
-                            [
-                                query_states.size(0),
-                                query_states.size(1),
-                                self.config.parscale_n_tokens,
-                                query_states.size(3),
-                            ],
-                            dtype=query_states.dtype,
-                            device=query_states.device,
-                        ),
-                        query_states,
+                        query_states.size(0),
+                        query_states.size(1),
+                        self.config.parscale_n_tokens,
+                        query_states.size(3),
                     ],
-                    dim=2,
+                    dtype=query_states.dtype,
+                    device=query_states.device,
                 )
+                prefix_query = _replicate_if_dtensor(prefix_query, query_states)
+                query_states = torch.cat([prefix_query, query_states], dim=2)
                 if attention_mask is not None:
-                    attention_mask = torch.cat(
-                        [
-                            torch.zeros(
-                                (
-                                    attention_mask.shape[0],
-                                    attention_mask.shape[1],
-                                    self.config.parscale_n_tokens,
-                                    attention_mask.shape[3],
-                                ),
-                                dtype=attention_mask.dtype,
-                                device=attention_mask.device,
-                            ),
-                            attention_mask,
-                        ],
-                        dim=2,
+                    prefix_mask_2d = torch.zeros(
+                        (
+                            attention_mask.shape[0],
+                            attention_mask.shape[1],
+                            self.config.parscale_n_tokens,
+                            attention_mask.shape[3],
+                        ),
+                        dtype=attention_mask.dtype,
+                        device=attention_mask.device,
                     )
+                    prefix_mask_2d = _replicate_if_dtensor(prefix_mask_2d, attention_mask)
+                    attention_mask = torch.cat([prefix_mask_2d, attention_mask], dim=2)
 
             if use_cross_attn:
                 # Apply cross-attention transformation to all QKV tensors
