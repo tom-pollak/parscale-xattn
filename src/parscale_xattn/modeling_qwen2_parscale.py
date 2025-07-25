@@ -339,7 +339,10 @@ class Qwen2Attention(nn.Module):
                 batch_size = key_states.size(0) // self.config.parscale_n
                 seq_len = key_states.size(2)
 
-                # Reshape key and value states for cross-replica attention
+                # Reshape query, key and value states for cross-replica attention
+                query_states_cross = rearrange(
+                    query_states, "(p b) h s d -> b p h s d", p=self.config.parscale_n
+                )
                 key_states_cross = rearrange(
                     key_states, "(p b) h s d -> b p h s d", p=self.config.parscale_n
                 )
@@ -348,6 +351,10 @@ class Qwen2Attention(nn.Module):
                 )
 
                 # For each position, concatenate keys/values from all replicas
+                # Query states are expanded to match key/value dimensions
+                query_states_all_replicas = rearrange(
+                    query_states_cross, "b p h s d -> b h s (p d)"
+                )
                 key_states_all_replicas = rearrange(
                     key_states_cross, "b p h s d -> b h s (p d)"
                 )
@@ -356,6 +363,11 @@ class Qwen2Attention(nn.Module):
                 )
 
                 # Expand back to (parscale_n * batch_size) format for attention computation
+                query_states = repeat(
+                    query_states_all_replicas,
+                    "b h s d -> (p b) h s d",
+                    p=self.config.parscale_n,
+                )
                 key_states = repeat(
                     key_states_all_replicas,
                     "b h s d -> (p b) h s d",
