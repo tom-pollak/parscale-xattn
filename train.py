@@ -44,6 +44,7 @@ class TrainingConfig:
     save_total_limit: int = 1  # Keep only final checkpoint
     logging_steps: int = 1000  # Log every 1000 steps for long training
     seed: int = 42
+    debug: bool = False
 
 
 @dataclass
@@ -130,7 +131,7 @@ def proc_dataset(dataset_name):
                 split="train",
                 streaming=True,
             )
-        case "dev":
+        case "debug":
             return load_dataset("roneneldan/TinyStories", split="train", streaming=False)
         case _:
             raise ValueError("invalid name", dataset_name)
@@ -191,8 +192,27 @@ def main():
     config = mk_config(wandb_config)
 
     tokenizer = AutoTokenizer.from_pretrained(config.training.base_model)
-    model = convert_qwen2_to_parscale(config.training.base_model, config.parscale)
-    dataset = proc_dataset(config.training.dataset)
+    if config.training.debug:
+        # Define a tiny configuration
+        tiny_config = Qwen2ParScaleConfig(
+            vocab_size=tokenizer.vocab_size,
+            hidden_size=64,
+            intermediate_size=128,
+            num_hidden_layers=2,
+            num_attention_heads=2,
+            num_key_value_heads=2,
+            max_position_embeddings=512,
+            parscale_n=config.parscale.parscale_n,
+            parscale_n_tokens=config.parscale.parscale_n_tokens,
+            enable_cross_attn=config.parscale.enable_cross_attn,
+            parscale_cross_attn_layers=config.parscale.parscale_cross_attn_layers,
+            enable_replica_rope=config.parscale.enable_replica_rope,
+        )
+        model = Qwen2ParScaleForCausalLM(tiny_config).to(torch.bfloat16)
+        dataset = proc_dataset("debug")
+    else:
+        model = convert_qwen2_to_parscale(config.training.base_model, config.parscale)
+        dataset = proc_dataset(config.training.dataset)
 
     def collate_fn(features):
         texts = [f["text"] for f in features]
