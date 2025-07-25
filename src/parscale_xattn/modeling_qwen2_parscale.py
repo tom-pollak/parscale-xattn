@@ -176,13 +176,15 @@ def eager_attention_forward(
 class ParscaleCache(DynamicCache):
     def __init__(self, prefix_k, prefix_v) -> None:
         super().__init__()
-        self._seen_tokens = (
-            0  # Used in `generate` to keep tally of how many tokens the cache has seen
-        )
-        self.key_cache: List[torch.Tensor] = prefix_k
-        self.value_cache: List[torch.Tensor] = prefix_v
         self.parscale_n = prefix_k[0].size(0)
         self.n_prefix_tokens = prefix_k[0].size(2)
+
+        # Initialize key_cache and value_cache with prefix tokens
+        self.key_cache: List[torch.Tensor] = [pk.clone() for pk in prefix_k]
+        self.value_cache: List[torch.Tensor] = [pv.clone() for pv in prefix_v]
+
+        # _seen_tokens should reflect the current length of the cache, including prefix
+        self._seen_tokens = self.n_prefix_tokens
 
     def update(
         self,
@@ -215,13 +217,14 @@ class ParscaleCache(DynamicCache):
         self.key_cache[layer_idx] = torch.cat([key_cache, key_states], dim=-2)
         self.value_cache[layer_idx] = torch.cat([value_cache, value_states], dim=-2)
 
+        # Update _seen_tokens to reflect the new total length
+        self._seen_tokens = self.key_cache[layer_idx].shape[-2]
+
         return self.key_cache[layer_idx], self.value_cache[layer_idx]
 
     def get_seq_length(self, layer_idx=0):
-        seq_len = super().get_seq_length(layer_idx)
-        if seq_len != 0:
-            seq_len -= self.n_prefix_tokens  # When n_prefix_tokens=0, this is a noop
-        return seq_len
+        # get_seq_length should return the actual length of the cache
+        return self.key_cache[layer_idx].shape[-2]
 
     def reorder_cache(self, beam_idx: torch.LongTensor):
         """Reorders the cache for beam search, given the selected beam indices."""
@@ -920,7 +923,6 @@ class Qwen2Model(Qwen2PreTrainedModel):
 
         if self.parscale_n > 1:
             # Input transformation: we directly copy the input for n_parscale times.
-            # The transformation is implemented through KVCache (ParscaleCache).
             inputs_embeds = repeat(
                 inputs_embeds, "b s h -> (n_parscale b) s h", n_parscale=self.parscale_n
             )
@@ -935,38 +937,31 @@ class Qwen2Model(Qwen2PreTrainedModel):
                     position_ids, "b s -> (n_parscale b) s", n_parscale=self.parscale_n
                 )
 
-            # The trained prefix is saved in layer.self_attn.prefix_k / layer.self_attn.prefix_v
-            # We extract them to construct ParscaleCache.
-            if self.config.parscale_n_tokens > 0 and (
-                past_key_values is None or past_key_values.get_seq_length() == 0
-            ):
+        # Initialize or update past_key_values
+        if past_key_values is None:
+            if self.config.parscale_n_tokens > 0:
                 past_key_values = ParscaleCache(
                     [layer.self_attn.prefix_k for layer in self.layers],
                     [layer.self_attn.prefix_v for layer in self.layers],
                 )
-            else:
-                past_key_values = None
-
-        if use_cache and past_key_values is None:
-            past_key_values = DynamicCache()
+            elif use_cache:
+                past_key_values = DynamicCache()
 
         if cache_position is None:
-            assert past_key_values is not None
             past_seen_tokens = (
                 past_key_values.get_seq_length() if past_key_values is not None else 0
             )
-            # Adjust cache_position to account for parscale_n_tokens if ParscaleCache is used
-            offset = (
-                self.config.parscale_n_tokens
-                if isinstance(past_key_values, ParscaleCache)
-                else 0
-            )
-            print(
-                f"DEBUG: past_seen_tokens={past_seen_tokens}, offset={offset}, inputs_embeds.shape[1]={inputs_embeds.shape[1]}"
-            )
+            current_sequence_length = inputs_embeds.shape[1]
+
+            # Truncate inputs_embeds if it exceeds max_position_embeddings
+            max_allowed_length = self.config.max_position_embeddings - past_seen_tokens
+            if current_sequence_length > max_allowed_length:
+                inputs_embeds = inputs_embeds[:, :max_allowed_length, :]
+                current_sequence_length = max_allowed_length
+
             cache_position = torch.arange(
-                past_seen_tokens + offset,
-                past_seen_tokens + offset + inputs_embeds.shape[1],
+                past_seen_tokens,
+                past_seen_tokens + current_sequence_length,
                 device=inputs_embeds.device,
             )
 
