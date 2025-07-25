@@ -4,6 +4,7 @@ from typing import Optional
 
 import torch
 import wandb
+from accelerate import Accelerator
 from datasets import load_dataset
 from omegaconf import OmegaConf, SCMode
 from pydantic import TypeAdapter
@@ -11,7 +12,6 @@ from pydantic.dataclasses import dataclass
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
-    DataCollatorWithPadding,
     Trainer,
     TrainingArguments,
 )
@@ -170,7 +170,9 @@ def mk_config() -> Config:
 
 
 def main():
-    wandb.init(project=os.environ.get("WANDB_PROJECT", "parscale-xattn"))
+    accelerator = Accelerator()
+    if accelerator.is_main_process:
+        wandb.init(project=os.environ.get("WANDB_PROJECT", "parscale-xattn"))
 
     config = mk_config()
 
