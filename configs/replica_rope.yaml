@@ -1,0 +1,9 @@
+parscale:
+  parscale_n: 4
+  parscale_n_tokens: 0
+  enable_cross_attn: true
+  parscale_cross_attn_layers: [0]
+  enable_replica_rope: true
+
+training:
+  output_dir: "./models/replica-rope"

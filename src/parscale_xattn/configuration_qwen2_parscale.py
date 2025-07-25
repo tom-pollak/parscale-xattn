@@ -111,6 +111,10 @@ class Qwen2ParScaleConfig(PretrainedConfig):
         parscale_cross_attn_layers (`list[int]`, *optional*, defaults to None):
             List of layer indices where cross-attention is enabled. If None, applies to all layers
             when enable_cross_attn is True.
+        enable_replica_rope (`bool`, *optional*, defaults to False):
+            Whether to apply replica-specific RoPE to cross-attention. Each replica gets a different
+            rotational position embedding based on its index (0, 1, ..., parscale_n-1).
+            Uses existing rope_scaling configuration with parscale_n as max sequence length.
 
     ```python
     >>> from transformers import Qwen2Model, Qwen2Config
@@ -164,6 +168,7 @@ class Qwen2ParScaleConfig(PretrainedConfig):
         parscale_attn_smooth=0.01,
         enable_cross_attn=False,
         parscale_cross_attn_layers=None,
+        enable_replica_rope=False,
         **kwargs,
     ):
         self.vocab_size = vocab_size
@@ -180,6 +185,7 @@ class Qwen2ParScaleConfig(PretrainedConfig):
         self.parscale_attn_smooth = parscale_attn_smooth
         self.enable_cross_attn = enable_cross_attn
         self.parscale_cross_attn_layers = parscale_cross_attn_layers
+        self.enable_replica_rope = enable_replica_rope
 
         # for backward compatibility
         if num_key_value_heads is None:
@@ -264,3 +270,16 @@ class Qwen2ParScaleConfig(PretrainedConfig):
                         f"Layer index {layer_idx} in parscale_cross_attn_layers is >= num_hidden_layers "
                         f"({self.num_hidden_layers})"
                     )
+
+        # Replica RoPE validation
+        if self.enable_replica_rope and not self.enable_cross_attn:
+            raise ValueError(
+                "Replica RoPE (enable_replica_rope=True) requires cross-attention to be enabled "
+                "(enable_cross_attn=True), but enable_cross_attn=False."
+            )
+
+        if self.enable_replica_rope and self.parscale_n == 1:
+            raise ValueError(
+                "Replica RoPE (enable_replica_rope=True) requires parscale_n > 1, "
+                f"but got parscale_n={self.parscale_n}."
+            )

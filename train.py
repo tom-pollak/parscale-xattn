@@ -26,6 +26,7 @@ class ParScaleConfig:
     parscale_n_tokens: int = 48
     enable_cross_attn: bool = False
     parscale_cross_attn_layers: Optional[list[int]] = None
+    enable_replica_rope: bool = False
 
 
 @dataclass
@@ -80,6 +81,7 @@ def convert_qwen2_to_parscale(
         parscale_n_tokens=parscale_config.parscale_n_tokens,
         enable_cross_attn=parscale_config.enable_cross_attn,
         parscale_cross_attn_layers=parscale_config.parscale_cross_attn_layers,
+        enable_replica_rope=parscale_config.enable_replica_rope,
     )
 
     parscale_model = Qwen2ParScaleForCausalLM(config)

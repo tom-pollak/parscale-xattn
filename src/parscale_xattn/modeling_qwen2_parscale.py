@@ -164,7 +164,7 @@ class ParscaleCache(DynamicCache):
         cache_kwargs: Optional[Dict[str, Any]] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         if self.key_cache[layer_idx].size(0) != key_states.size(0):
-            # first time generation - expand cache from (parscale_n, heads, seq, dim) 
+            # first time generation - expand cache from (parscale_n, heads, seq, dim)
             # to (parscale_n * batch_size, heads, seq, dim)
             batch_size = key_states.size(0) // self.parscale_n
             self.key_cache[layer_idx] = repeat(
@@ -174,7 +174,7 @@ class ParscaleCache(DynamicCache):
             )
             self.value_cache[layer_idx] = repeat(
                 self.value_cache[layer_idx],
-                "p h s d -> (p b) h s d", 
+                "p h s d -> (p b) h s d",
                 b=batch_size,
             )
         return super().update(key_states, value_states, layer_idx, cache_kwargs)
@@ -255,14 +255,60 @@ class Qwen2Attention(nn.Module):
                 )
             )
 
-    def _apply_cross_attention(self, query_states, key_states, value_states):
+    def _apply_cross_attention(
+        self, query_states, key_states, value_states, replica_rope_embeddings=None
+    ):
         """
         Apply cross-attention transformation to query, key, and value states.
 
         Transforms tensors from (parscale_n * batch_size, num_heads, seq_len, head_dim)
         to (parscale_n * batch_size, num_heads, seq_len, parscale_n * head_dim)
         by concatenating features from all replicas for each position.
+
+        Args:
+            replica_rope_embeddings: Optional tuple of (cos, sin) tensors for replica-specific RoPE
         """
+
+        # Apply replica-specific RoPE if enabled
+        if replica_rope_embeddings is not None and self.config.enable_replica_rope:
+            replica_cos, replica_sin = replica_rope_embeddings
+
+            # Apply replica-specific RoPE to query and key states
+            p, b = (
+                self.config.parscale_n,
+                query_states.size(0) // self.config.parscale_n,
+            )
+
+            # Reshape to separate replicas: (p*b, h, s, d) -> (b, p, h, s, d)
+            q_reshaped = rearrange(query_states, "(p b) h s d -> b p h s d", p=p)
+            k_reshaped = rearrange(key_states, "(p b) h s d -> b p h s d", p=p)
+
+            # Apply replica-specific RoPE to each replica
+            q_rope_applied = []
+            k_rope_applied = []
+
+            for replica_idx in range(p):
+                # Get replica-specific cos/sin (batch_size, 1, seq_len, head_dim)
+                replica_cos_i = replica_cos[:, replica_idx : replica_idx + 1, :, :]
+                replica_sin_i = replica_sin[:, replica_idx : replica_idx + 1, :, :]
+
+                # Apply RoPE to this replica's q and k
+                q_i, k_i = apply_rotary_pos_emb(
+                    q_reshaped[:, replica_idx],
+                    k_reshaped[:, replica_idx],
+                    replica_cos_i.squeeze(1),
+                    replica_sin_i.squeeze(1),
+                )
+                q_rope_applied.append(q_i)
+                k_rope_applied.append(k_i)
+
+            # Stack back: list of (b, h, s, d) -> (b, p, h, s, d) -> (p*b, h, s, d)
+            query_states = rearrange(
+                torch.stack(q_rope_applied, dim=1), "b p h s d -> (p b) h s d"
+            )
+            key_states = rearrange(
+                torch.stack(k_rope_applied, dim=1), "b p h s d -> (p b) h s d"
+            )
 
         # Process all three tensors in parallel with the same transformation
         def transform_tensor(tensor):
@@ -291,6 +337,7 @@ class Qwen2Attention(nn.Module):
         attention_mask: Optional[torch.Tensor],
         past_key_value: Optional[Cache] = None,
         cache_position: Optional[torch.LongTensor] = None,
+        replica_position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         **kwargs: Unpack[FlashAttentionKwargs],
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         input_shape = hidden_states.shape[:-1]
@@ -381,7 +428,7 @@ class Qwen2Attention(nn.Module):
             if use_cross_attn:
                 # Apply cross-attention transformation to all QKV tensors
                 query_states, key_states, value_states = self._apply_cross_attention(
-                    query_states, key_states, value_states
+                    query_states, key_states, value_states, replica_position_embeddings
                 )
 
         # Set flag to indicate cross-attention expansion
@@ -512,6 +559,9 @@ class Qwen2DecoderLayer(nn.Module):
         position_embeddings: Optional[
             Tuple[torch.Tensor, torch.Tensor]
         ] = None,  # necessary, but kept here for BC
+        replica_position_embeddings: Optional[
+            Tuple[torch.Tensor, torch.Tensor]
+        ] = None,  # replica-specific RoPE embeddings for cross-attention
         **kwargs: Unpack[FlashAttentionKwargs],
     ) -> Tuple[
         torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]
@@ -530,6 +580,7 @@ class Qwen2DecoderLayer(nn.Module):
             use_cache=use_cache,
             cache_position=cache_position,
             position_embeddings=position_embeddings,
+            replica_position_embeddings=replica_position_embeddings,
             **kwargs,
         )
         hidden_states = residual + hidden_states
@@ -923,6 +974,39 @@ class Qwen2Model(Qwen2PreTrainedModel):
         # create position embeddings to be shared across the decoder layers
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
 
+        # create replica-specific position embeddings for cross-attention if enabled
+        replica_position_embeddings = None
+        if self.config.enable_replica_rope:
+            batch_size = hidden_states.size(0) // self.config.parscale_n
+            seq_len = hidden_states.size(1)
+
+            # Create replica position IDs: each replica gets its replica_idx as position
+            replica_position_ids = (
+                torch.arange(
+                    self.config.parscale_n,
+                    device=hidden_states.device,
+                    dtype=torch.long,
+                )
+                .unsqueeze(0)
+                .expand(batch_size, -1)
+            )
+
+            # Generate RoPE embeddings for replica positions
+            replica_cos, replica_sin = self.rotary_emb(
+                hidden_states[:batch_size], replica_position_ids
+            )
+
+            # Reshape to (batch_size, parscale_n, 1, head_dim) and expand to sequence length
+            head_dim = self.config.hidden_size // self.config.num_attention_heads
+            replica_cos = replica_cos.view(
+                batch_size, self.config.parscale_n, 1, head_dim
+            ).expand(-1, -1, seq_len, -1)
+            replica_sin = replica_sin.view(
+                batch_size, self.config.parscale_n, 1, head_dim
+            ).expand(-1, -1, seq_len, -1)
+
+            replica_position_embeddings = (replica_cos, replica_sin)
+
         # decoder layers
         all_hidden_states = () if output_hidden_states else None
         all_self_attns = () if output_attentions else None
@@ -942,6 +1026,7 @@ class Qwen2Model(Qwen2PreTrainedModel):
                     use_cache,
                     cache_position,
                     position_embeddings,
+                    replica_position_embeddings,
                 )
             else:
                 layer_outputs = decoder_layer(
@@ -953,6 +1038,7 @@ class Qwen2Model(Qwen2PreTrainedModel):
                     use_cache=use_cache,
                     cache_position=cache_position,
                     position_embeddings=position_embeddings,
+                    replica_position_embeddings=replica_position_embeddings,
                     **flash_attn_kwargs,
                 )
 
