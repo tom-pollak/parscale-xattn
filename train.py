@@ -170,7 +170,7 @@ def mk_config() -> Config:
 
 
 def main():
-    wandb.init(project=os.environ["WANDB_PROJECT"])
+    wandb.init(project=os.environ.get("WANDB_PROJECT", "parscale-xattn"))
 
     config = mk_config()
 

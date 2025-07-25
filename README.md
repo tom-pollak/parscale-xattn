@@ -34,13 +34,13 @@ pip install -e .
 #### Single GPU
 ```bash
 # Basic ParScale training (parscale_n=1, like standard Qwen2)
-uv run python train.py --config-path=configs --config-name=basic
+CONFIG_FILE=configs/basic.yaml uv run accelerate launch train.py
 
 # ParScale with 4 replicas
-uv run python train.py --config-path=configs --config-name=basic parscale.parscale_n=4
+CONFIG_FILE=configs/basic.yaml uv run accelerate launch  train.py --parscale.parscale_n=4
 
 # Cross-attention enabled with 4 replicas
-uv run python train.py --config-path=configs --config-name=cross_attn parscale.parscale_n=4
+CONFIG_FILE=configs/cross_attn.yaml uv run accelerate launch  train.py --parscale.parscale_n=4
 ```
 
 #### Multi-GPU (8 GPUs with FSDP)
