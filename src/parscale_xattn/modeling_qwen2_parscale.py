@@ -4,10 +4,11 @@ All modifications are wrapped within the condition 'parscale_n > 1'.
 If you are interested in how ParScale is implemented, please search for "parscale_n" in this file.
 """
 
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import copy
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
+import torch.nn.functional as F
 from einops import rearrange, repeat
 from torch import nn
 from transformers.activations import ACT2FN
@@ -35,7 +36,6 @@ from transformers.utils import (
 )
 
 from .configuration_qwen2_parscale import Qwen2ParScaleConfig
-
 
 logger = logging.get_logger(__name__)
 
@@ -140,7 +140,8 @@ def eager_attention_forward(
 class ParscaleCache(DynamicCache):
     def __init__(self, prefix_k, prefix_v) -> None:
         super().__init__()
-        self._seen_tokens = 0  # Used in `generate` to keep tally of how many tokens the cache has seen
+        # Used in `generate` to keep tally of how many tokens the cache has seen
+        self._seen_tokens = 0
         self.key_cache: List[torch.Tensor] = prefix_k
         self.value_cache: List[torch.Tensor] = prefix_v
         self.parscale_n = prefix_k[0].size(0)
@@ -178,9 +179,6 @@ class ParscaleCache(DynamicCache):
         b = self.key_cache[0].size(0) // self.parscale_n
         beam_idx = torch.cat([beam_idx + b * i for i in range(self.parscale_n)])
         super().reorder_cache(beam_idx)
-
-
-
 
 
 class Qwen2Attention(nn.Module):
@@ -367,6 +365,8 @@ class CrossReplicaAttention(nn.Module):
         self.hidden_size = config.hidden_size
         self.parscale_n = config.parscale_n
         self.num_heads = config.num_attention_heads
+        self.num_key_value_heads = config.num_key_value_heads
+        self.num_key_value_groups = self.num_heads // self.num_key_value_heads
         self.head_dim = self.hidden_size // self.num_heads
         self.scaling = self.head_dim**-0.5
 
@@ -375,10 +375,18 @@ class CrossReplicaAttention(nn.Module):
                 f"hidden_size must be divisible by num_heads, but got hidden_size={self.hidden_size} and num_heads={self.num_heads}"
             )
 
-        self.q_proj = nn.Linear(self.hidden_size, self.hidden_size, bias=True)
-        self.k_proj = nn.Linear(self.hidden_size, self.hidden_size, bias=True)
-        self.v_proj = nn.Linear(self.hidden_size, self.hidden_size, bias=True)
-        self.o_proj = nn.Linear(self.hidden_size, self.hidden_size, bias=False)
+        self.q_proj = nn.Linear(
+            config.hidden_size, config.num_attention_heads * self.head_dim, bias=True
+        )
+        self.k_proj = nn.Linear(
+            config.hidden_size, config.num_key_value_heads * self.head_dim, bias=True
+        )
+        self.v_proj = nn.Linear(
+            config.hidden_size, config.num_key_value_heads * self.head_dim, bias=True
+        )
+        self.o_proj = nn.Linear(
+            config.num_attention_heads * self.head_dim, config.hidden_size, bias=False
+        )
         self.attention_dropout = config.attention_dropout
 
     def forward(
@@ -398,54 +406,45 @@ class CrossReplicaAttention(nn.Module):
         k = self.k_proj(hidden_states)
         v = self.v_proj(hidden_states)
 
-        # Reshape for attention: (p*b, s, d) -> (b*s, p, h, d_h)
-        q = rearrange(q, "(p b) s (h d_h) -> (b s) p h d_h", p=p, h=self.num_heads)
-        k = rearrange(k, "(p b) s (h d_h) -> (b s) p h d_h", p=p, h=self.num_heads)
-        v = rearrange(v, "(p b) s (h d_h) -> (b s) p h d_h", p=p, h=self.num_heads)
+        # Reshape for attention: (p*b, s, d) -> (b*s, h, p, d_h)
+        q = rearrange(q, "(p b) s (h d_h) -> (b s) h p d_h", p=p, h=self.num_heads)
+        k = rearrange(
+            k,
+            "(p b) s (h d_h) -> (b s) h p d_h",
+            p=p,
+            h=self.num_key_value_heads,
+        )
+        v = rearrange(
+            v,
+            "(p b) s (h d_h) -> (b s) h p d_h",
+            p=p,
+            h=self.num_key_value_heads,
+        )
 
         # Apply RoPE if provided
         if replica_position_embeddings is not None:
             cos, sin = replica_position_embeddings
             # cos/sin are (b, p, d_h). We need to reshape for (b*s, p, d_h)
-            # The embeddings are independent of sequence length, so we can just expand
             cos = cos.unsqueeze(1).expand(-1, s, -1, -1).reshape(b * s, p, -1)
             sin = sin.unsqueeze(1).expand(-1, s, -1, -1).reshape(b * s, p, -1)
+            q, k = apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=2)
 
-            # Reshape q/k for RoPE: (b*s, p, h, d_h) -> (b*s, h, p, d_h)
-            q_for_rope = q.transpose(1, 2)
-            k_for_rope = k.transpose(1, 2)
+        # Repeat K,V for GQA
+        k = repeat_kv(k, self.num_key_value_groups)
+        v = repeat_kv(v, self.num_key_value_groups)
 
-            # Apply RoPE
-            q_for_rope, k_for_rope = apply_rotary_pos_emb(
-                q_for_rope, k_for_rope, cos, sin, unsqueeze_dim=1
-            )
-
-            # Reshape back: (b*s, h, p, d_h) -> (b*s, p, h, d_h)
-            q = q_for_rope.transpose(1, 2)
-            k = k_for_rope.transpose(1, 2)
-
-        # Transpose for matmul: (b*s, h, p, d_h)
-        q = q.transpose(1, 2)
-        k = k.transpose(1, 2)
-        v = v.transpose(1, 2)
-
-        # Attention score: (b*s, h, p, p)
-        attn_weights = torch.matmul(q, k.transpose(2, 3)) * self.scaling
-        attn_weights = nn.functional.softmax(
-            attn_weights, dim=-1, dtype=torch.float32
-        ).to(q.dtype)
-        attn_weights = nn.functional.dropout(
-            attn_weights, p=self.attention_dropout, training=self.training
+        # Use F.scaled_dot_product_attention
+        attn_output = F.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            dropout_p=self.attention_dropout if self.training else 0.0,
+            is_causal=False,
         )
 
-        # Attention output: (b*s, h, p, d_h)
-        attn_output = torch.matmul(attn_weights, v)
-
-        # Reshape back to original format
-        # (b*s, h, p, d_h) -> (b*s, p, h, d_h) -> (p*b, s, d)
-        attn_output = attn_output.transpose(1, 2)
+        # Reshape back to original format: (b*s, h, p, d_h) -> (p*b, s, d)
         attn_output = rearrange(
-            attn_output, "(b s) p h d_h -> (p b) s (h d_h)", b=b, s=s
+            attn_output, "(b s) h p d_h -> (p b) s (h p d_h)", b=b, s=s
         )
 
         attn_output = self.o_proj(attn_output)
@@ -490,10 +489,7 @@ class Qwen2DecoderLayer(nn.Module):
                 config.hidden_size, eps=config.rms_norm_eps
             )
 
-        if (
-            config.sliding_window
-            and config._attn_implementation != "flash_attention_2"
-        ):
+        if config.sliding_window and config._attn_implementation != "flash_attention_2":
             logger.warning_once(
                 f"Sliding Window Attention is enabled but not implemented for `{config._attn_implementation}`; "
                 "unexpected results may be encountered."
