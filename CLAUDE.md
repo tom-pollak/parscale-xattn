@@ -8,27 +8,16 @@ This is a ParScale-XAttn extension project that implements cross-attention acros
 
 ## Architecture
 
-### Core Components
+### Key Configuration Parameters
 
-- **Configuration**: `Qwen2ParScaleConfig` extends standard Qwen2 configuration with ParScale-specific parameters:
-  - `parscale_n`: Number of parallel replicas (default: 1)
-  - `parscale_n_tokens`: Number of prefix tokens for cross-replica communication (default: 48)
-  - `parscale_attn_smooth`: Attention smoothing parameter (default: 0.01)
+- `parscale_n`: Number of parallel replicas (default: 1)
+- `parscale_n_tokens`: Number of prefix tokens for cross-replica communication (default: 48)
+- `enable_cross_attn`: Enable cross-attention between same-position tokens across replicas (default: False)
+- `parscale_cross_attn_layers`: List of layer indices where cross-attention is enabled (default: None)
 
-- **Model Classes**:
-  - `Qwen2ParScaleForCausalLM`: Main causal language model with ParScale support
-  - `Qwen2Model`: Core transformer model with replica aggregation
-  - `Qwen2Attention`: Attention mechanism with prefix tokens for cross-replica communication
-  - `ParscaleCache`: Custom cache implementation handling prefix tokens across replicas
+### ParScale Overview
 
-### ParScale Implementation Details
-
-When `parscale_n > 1`, the model operates with multiple parallel replicas:
-
-1. **Input Replication**: Input embeddings are replicated across `parscale_n` replicas
-2. **Prefix Tokens**: Each attention layer uses learnable prefix tokens (`prefix_k`, `prefix_v`) stored as model parameters
-3. **Cross-Replica Communication**: Attention mechanisms can attend to prefix tokens from all replicas
-4. **Output Aggregation**: A learned aggregation layer dynamically weights outputs from different replicas
+ParScale operates with multiple parallel replicas when `parscale_n > 1`. This extension adds cross-attention between same-position tokens across replicas, complementing the existing prefix token communication mechanism.
 
 ## Development Commands
 
@@ -36,7 +25,6 @@ When `parscale_n > 1`, the model operates with multiple parallel replicas:
 ```bash
 # Use uv for Python environment management
 uv run python <script.py>
-uv run pytest <test_file>
 ```
 
 ### Code Formatting
@@ -45,28 +33,53 @@ uv run pytest <test_file>
 ruff format
 ```
 
+### Training Commands
+```bash
+# Single GPU training - Basic ParScale (parscale_n=1, like standard Qwen2)
+uv run python train.py --config-path=configs --config-name=basic
+
+# ParScale with 4 replicas
+uv run python train.py --config-path=configs --config-name=basic parscale.parscale_n=4
+
+# Cross-attention enabled with 4 replicas
+uv run python train.py --config-path=configs --config-name=cross_attn parscale.parscale_n=4
+
+# Multi-GPU training (8 GPUs with FSDP)
+CONFIG_FILE=configs/basic.yaml torchrun --nproc_per_node=8 train.py \
+  parscale.parscale_n=4 \
+  training.per_device_train_batch_size=1 \
+  training.gradient_accumulation_steps=16
+```
+
+### Hyperparameter Sweeps
+```bash
+# Create and run wandb sweeps for systematic experiments
+python wandb_sweep.py create lr_verification
+wandb agent <sweep_id>
+
+# Available sweep types: lr_verification, parscale_scaling, xattn_all_layers, xattn_preset_layers
+```
+
 ### Model Usage
 ```python
 from parscale_xattn import Qwen2ParScaleForCausalLM, Qwen2ParScaleConfig
 
-# Standard Qwen2 usage (parscale_n=1)
+# Standard usage (parscale_n=1 behaves like Qwen2)
 config = Qwen2ParScaleConfig()
 model = Qwen2ParScaleForCausalLM(config)
 
-# ParScale with cross-attention (parscale_n>1)
-config = Qwen2ParScaleConfig(parscale_n=4, parscale_n_tokens=48)
+# ParScale with cross-attention on specific layers
+config = Qwen2ParScaleConfig(
+    parscale_n=4, 
+    enable_cross_attn=True,
+    parscale_cross_attn_layers=[0, 4, 8, 12]
+)
 model = Qwen2ParScaleForCausalLM(config)
 ```
 
 ## Key Implementation Notes
 
 - All ParScale modifications are conditionally wrapped with `if config.parscale_n > 1`
-- The model maintains backward compatibility with standard Qwen2 when `parscale_n=1`
-- Cross-replica attention is implemented through prefix tokens rather than explicit cross-attention layers
-- The aggregation mechanism uses learned attention weights with optional smoothing
-
-## File Structure
-
-- `src/parscale_xattn/configuration_qwen2_parscale.py`: Model configuration with ParScale parameters
-- `src/parscale_xattn/modeling_qwen2_parscale.py`: Core model implementation with ParScale extensions
-- `src/parscale_xattn/__init__.py`: Package exports and public API
+- Maintains backward compatibility with standard Qwen2 when `parscale_n=1`
+- Two communication mechanisms: prefix tokens (always enabled) + optional cross-attention
+- Training follows two-stage approach: convert existing Qwen2 → continue training with ParScale parameters
