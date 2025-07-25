@@ -116,16 +116,8 @@ def eager_attention_forward(
     dropout: float = 0.0,
     **kwargs,
 ):
-    # Check if keys/values have been expanded for cross-attention
-    cross_attn_expanded = getattr(module, "_cross_attn_expanded", False)
-
-    if not cross_attn_expanded:
-        key_states = repeat_kv(key, module.num_key_value_groups)
-        value_states = repeat_kv(value, module.num_key_value_groups)
-    else:
-        # Keys/values already expanded for cross-attention, use as-is
-        key_states = key
-        value_states = value
+    key_states = repeat_kv(key, module.num_key_value_groups)
+    value_states = repeat_kv(value, module.num_key_value_groups)
 
     attn_weights = torch.matmul(query, key_states.transpose(2, 3)) * scaling
     if attention_mask is not None:
@@ -219,16 +211,6 @@ class Qwen2Attention(nn.Module):
             config.num_attention_heads * self.head_dim, config.hidden_size, bias=False
         )
 
-        # Initialize cross-attention projection layer if cross-attention is enabled
-        # Note: config validation ensures enable_cross_attn implies parscale_n > 1
-        if config.enable_cross_attn:
-            cross_attn_input_size = (
-                config.parscale_n * config.num_attention_heads * self.head_dim
-            )
-            self.cross_attn_proj = nn.Linear(
-                cross_attn_input_size, config.hidden_size, bias=False
-            )
-
         # Initialize prefix tokens if enabled
         # Note: config validation ensures parscale_n_tokens > 0 implies parscale_n > 1
         if config.parscale_n_tokens > 0:
@@ -253,81 +235,6 @@ class Qwen2Attention(nn.Module):
                 )
             )
 
-    def _apply_cross_attention(
-        self, query_states, key_states, value_states, replica_rope_embeddings=None
-    ):
-        """
-        Apply cross-attention transformation to query, key, and value states.
-
-        Transforms tensors from (parscale_n * batch_size, num_heads, seq_len, head_dim)
-        to (parscale_n * batch_size, num_heads, seq_len, parscale_n * head_dim)
-        by concatenating features from all replicas for each position.
-
-        Args:
-            replica_rope_embeddings: Optional tuple of (cos, sin) tensors for replica-specific RoPE
-        """
-
-        # Apply replica-specific RoPE if enabled
-        if replica_rope_embeddings is not None and self.config.enable_replica_rope:
-            replica_cos, replica_sin = replica_rope_embeddings
-
-            # Apply replica-specific RoPE to query and key states
-            p, b = (
-                self.config.parscale_n,
-                query_states.size(0) // self.config.parscale_n,
-            )
-
-            # Reshape to separate replicas: (p*b, h, s, d) -> (b, p, h, s, d)
-            q_reshaped = rearrange(query_states, "(p b) h s d -> b p h s d", p=p)
-            k_reshaped = rearrange(key_states, "(p b) h s d -> b p h s d", p=p)
-
-            # Apply replica-specific RoPE to each replica
-            q_rope_applied = []
-            k_rope_applied = []
-
-            for replica_idx in range(p):
-                # Get replica-specific cos/sin (batch_size, 1, seq_len, head_dim)
-                replica_cos_i = replica_cos[:, replica_idx : replica_idx + 1, :, :]
-                replica_sin_i = replica_sin[:, replica_idx : replica_idx + 1, :, :]
-
-                # Apply RoPE to this replica's q and k
-                q_i, k_i = apply_rotary_pos_emb(
-                    q_reshaped[:, replica_idx],
-                    k_reshaped[:, replica_idx],
-                    replica_cos_i.squeeze(1),
-                    replica_sin_i.squeeze(1),
-                )
-                q_rope_applied.append(q_i)
-                k_rope_applied.append(k_i)
-
-            # Stack back: list of (b, h, s, d) -> (b, p, h, s, d) -> (p*b, h, s, d)
-            query_states = rearrange(
-                torch.stack(q_rope_applied, dim=1), "b p h s d -> (p b) h s d"
-            )
-            key_states = rearrange(
-                torch.stack(k_rope_applied, dim=1), "b p h s d -> (p b) h s d"
-            )
-
-        # Process all three tensors in parallel with the same transformation
-        def transform_tensor(tensor):
-            # Direct transformation: (p*b, h, s, d) -> (p*b, h, s, p*d)
-            p, b = self.config.parscale_n, tensor.size(0) // self.config.parscale_n
-
-            # Reshape to separate replica dimension: (p*b, h, s, d) -> (b, p, h, s, d)
-            reshaped = rearrange(tensor, "(p b) h s d -> b p h s d", p=p)
-
-            # Concatenate replicas in feature dimension: (b, p, h, s, d) -> (b, h, s, p*d)
-            concat = rearrange(reshaped, "b p h s d -> b h s (p d)")
-
-            # Expand back to all replicas: (b, h, s, p*d) -> (p*b, h, s, p*d)
-            return repeat(concat, "b h s d -> (p b) h s d", p=p)
-
-        return (
-            transform_tensor(query_states),
-            transform_tensor(key_states),
-            transform_tensor(value_states),
-        )
-
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -335,7 +242,6 @@ class Qwen2Attention(nn.Module):
         attention_mask: Optional[torch.Tensor],
         past_key_value: Optional[Cache] = None,
         cache_position: Optional[torch.LongTensor] = None,
-        replica_position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         **kwargs: Unpack[FlashAttentionKwargs],
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         input_shape = hidden_states.shape[:-1]
@@ -356,12 +262,6 @@ class Qwen2Attention(nn.Module):
             key_states, value_states = past_key_value.update(
                 key_states, value_states, self.layer_idx, cache_kwargs
             )
-
-        # Cross-attention between same-position tokens across replicas
-        use_cross_attn = self.config.enable_cross_attn and (
-            self.config.parscale_cross_attn_layers is None
-            or self.layer_idx in self.config.parscale_cross_attn_layers
-        )
 
         if self.config.parscale_n > 1 and self.config.parscale_n_tokens > 0:
             # Expand attention mask to contain the prefix tokens
@@ -412,15 +312,6 @@ class Qwen2Attention(nn.Module):
                     )
                     attention_mask = torch.cat([prefix_mask_2d, attention_mask], dim=2)
 
-            if use_cross_attn:
-                # Apply cross-attention transformation to all QKV tensors
-                query_states, key_states, value_states = self._apply_cross_attention(
-                    query_states, key_states, value_states, replica_position_embeddings
-                )
-
-        # Set flag to indicate cross-attention expansion
-        self._cross_attn_expanded = use_cross_attn
-
         sliding_window = None
         if (
             self.config.use_sliding_window
@@ -460,42 +351,192 @@ class Qwen2Attention(nn.Module):
             # Remove the prefix part
             attn_output = attn_output[:, self.config.parscale_n_tokens :]
 
-        # Handle output projection with dimension validation
-        # Note: use_cross_attn can only be True when parscale_n > 1 (enforced by config validation)
-        if use_cross_attn:
-            # Cross-attention: project expanded features back to hidden_size
-            attn_output = attn_output.reshape(*input_shape, -1).contiguous()
-            batch_seq_size = attn_output.size(0) * attn_output.size(1)
-            flattened_output = attn_output.view(batch_seq_size, -1)
+        # Standard attention: use regular output projection
+        attn_output = attn_output.reshape(*input_shape, -1).contiguous()
+        flattened_output = attn_output.view(-1, attn_output.size(-1))
 
-            # Assert tensor dimensions match cross-attention projection expectations
-            expected_cross_dim = (
-                self.config.parscale_n * self.config.num_attention_heads * self.head_dim
-            )
-            actual_dim = flattened_output.size(-1)
-            assert actual_dim == expected_cross_dim, (
-                f"Cross-attention tensor dimension mismatch: expected {expected_cross_dim}, "
-                f"got {actual_dim}. This suggests inconsistent cross-attention state."
-            )
+        # Assert tensor dimensions match standard projection expectations
+        expected_std_dim = self.config.num_attention_heads * self.head_dim
+        actual_dim = flattened_output.size(-1)
+        assert actual_dim == expected_std_dim, (
+            f"Standard attention tensor dimension mismatch: expected {expected_std_dim}, "
+            f"got {actual_dim}. This suggests cross-attention contamination when parscale_n={self.config.parscale_n}, "
+            f"layer_idx={self.layer_idx}"
+        )
 
-            attn_output = self.cross_attn_proj(flattened_output)
-            attn_output = attn_output.view(*input_shape, self.config.hidden_size)
-        else:
-            # Standard attention: use regular output projection
-            attn_output = attn_output.reshape(*input_shape, -1).contiguous()
-            flattened_output = attn_output.view(-1, attn_output.size(-1))
-
-            # Assert tensor dimensions match standard projection expectations
-            expected_std_dim = self.config.num_attention_heads * self.head_dim
-            actual_dim = flattened_output.size(-1)
-            assert actual_dim == expected_std_dim, (
-                f"Standard attention tensor dimension mismatch: expected {expected_std_dim}, "
-                f"got {actual_dim}. This suggests cross-attention contamination when parscale_n={self.config.parscale_n}, "
-                f"use_cross_attn={use_cross_attn}, layer_idx={self.layer_idx}"
-            )
-
-            attn_output = self.o_proj(attn_output)
+        attn_output = self.o_proj(attn_output)
         return attn_output, attn_weights
+
+
+class CrossReplicaAttention(nn.Module):
+    def __init__(self, config: Qwen2ParScaleConfig):
+        super().__init__()
+        self.config = config
+        self.hidden_size = config.hidden_size
+        self.parscale_n = config.parscale_n
+        self.num_heads = config.num_attention_heads
+        self.head_dim = self.hidden_size // self.num_heads
+        self.scaling = self.head_dim**-0.5
+
+        if (self.hidden_size % self.num_heads) != 0:
+            raise ValueError(
+                f"hidden_size must be divisible by num_heads, but got hidden_size={self.hidden_size} and num_heads={self.num_heads}"
+            )
+
+        self.q_proj = nn.Linear(self.hidden_size, self.hidden_size, bias=True)
+        self.k_proj = nn.Linear(self.hidden_size, self.hidden_size, bias=True)
+        self.v_proj = nn.Linear(self.hidden_size, self.hidden_size, bias=True)
+        self.o_proj = nn.Linear(self.hidden_size, self.hidden_size, bias=False)
+        self.attention_dropout = config.attention_dropout
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        # hidden_states: (p*b, s, d)
+        p = self.parscale_n
+        b, s, d = (
+            hidden_states.size(0) // p,
+            hidden_states.size(1),
+            hidden_states.size(2),
+        )
+
+        q = self.q_proj(hidden_states)
+        k = self.k_proj(hidden_states)
+        v = self.v_proj(hidden_states)
+
+        # Reshape for attention: (p*b, s, d) -> (b*s, p, h, d_h)
+        q = rearrange(q, "(p b) s (h d_h) -> (b s) p h d_h", p=p, h=self.num_heads)
+        k = rearrange(k, "(p b) s (h d_h) -> (b s) p h d_h", p=p, h=self.num_heads)
+        v = rearrange(v, "(p b) s (h d_h) -> (b s) p h d_h", p=p, h=self.num_heads)
+
+        # Transpose for matmul: (b*s, h, p, d_h)
+        q = q.transpose(1, 2)
+        k = k.transpose(1, 2)
+        v = v.transpose(1, 2)
+
+        # Attention score: (b*s, h, p, p)
+        attn_weights = torch.matmul(q, k.transpose(2, 3)) * self.scaling
+        attn_weights = nn.functional.softmax(
+            attn_weights, dim=-1, dtype=torch.float32
+        ).to(q.dtype)
+        attn_weights = nn.functional.dropout(
+            attn_weights, p=self.attention_dropout, training=self.training
+        )
+
+        # Attention output: (b*s, h, p, d_h)
+        attn_output = torch.matmul(attn_weights, v)
+
+        # Reshape back to original format
+        # (b*s, h, p, d_h) -> (b*s, p, h, d_h) -> (p*b, s, d)
+        attn_output = attn_output.transpose(1, 2)
+        attn_output = rearrange(
+            attn_output, "(b s) p h d_h -> (p b) s (h d_h)", b=b, s=s
+        )
+
+        attn_output = self.o_proj(attn_output)
+        return attn_output
+
+
+class Qwen2RMSNorm(nn.Module):
+    def __init__(self, hidden_size, eps=1e-6):
+        """
+        Qwen2RMSNorm is equivalent to T5LayerNorm
+        """
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(hidden_size))
+        self.variance_epsilon = eps
+
+    def forward(self, hidden_states):
+        input_dtype = hidden_states.dtype
+        hidden_states = hidden_states.to(torch.float32)
+        variance = hidden_states.pow(2).mean(-1, keepdim=True)
+        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
+        return self.weight * hidden_states.to(input_dtype)
+
+    def extra_repr(self):
+        return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
+
+
+class Qwen2DecoderLayer(nn.Module):
+    def __init__(self, config: Qwen2ParScaleConfig, layer_idx: int):
+        super().__init__()
+        self.hidden_size = config.hidden_size
+        self.self_attn = Qwen2Attention(config=config, layer_idx=layer_idx)
+        self.mlp = Qwen2MLP(config)
+        self.input_layernorm = Qwen2RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.post_attention_layernorm = Qwen2RMSNorm(
+            config.hidden_size, eps=config.rms_norm_eps
+        )
+        self.config = config
+        self.layer_idx = layer_idx
+        if self.config.enable_cross_attn:
+            self.cross_replica_attn = CrossReplicaAttention(config)
+            self.cross_replica_layernorm = Qwen2RMSNorm(
+                config.hidden_size, eps=config.rms_norm_eps
+            )
+
+        if (
+            config.sliding_window
+            and config._attn_implementation != "flash_attention_2"
+        ):
+            logger.warning_once(
+                f"Sliding Window Attention is enabled but not implemented for `{config._attn_implementation}`; "
+                "unexpected results may be encountered."
+            )
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_value: Optional[Cache] = None,
+        output_attentions: Optional[bool] = False,
+        use_cache: Optional[bool] = False,
+        cache_position: Optional[torch.LongTensor] = None,
+        position_embeddings: Optional[
+            Tuple[torch.Tensor, torch.Tensor]
+        ] = None,  # necessary, but kept here for BC
+        **kwargs: Unpack[FlashAttentionKwargs],
+    ) -> Tuple[
+        torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]
+    ]:
+        residual = hidden_states
+
+        hidden_states = self.input_layernorm(hidden_states)
+
+        # Self Attention
+        hidden_states, self_attn_weights = self.self_attn(
+            hidden_states=hidden_states,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_value=past_key_value,
+            output_attentions=output_attentions,
+            use_cache=use_cache,
+            cache_position=cache_position,
+            position_embeddings=position_embeddings,
+            **kwargs,
+        )
+        hidden_states = residual + hidden_states
+
+        # Cross-Replica Attention
+        if self.config.enable_cross_attn and (
+            self.config.parscale_cross_attn_layers is None
+            or self.layer_idx in self.config.parscale_cross_attn_layers
+        ):
+            residual = hidden_states
+            hidden_states = self.cross_replica_layernorm(hidden_states)
+            hidden_states = self.cross_replica_attn(hidden_states)
+            hidden_states = residual + hidden_states
+
+        # Fully Connected
+        residual = hidden_states
+        hidden_states = self.post_attention_layernorm(hidden_states)
+        hidden_states = self.mlp(hidden_states)
+        hidden_states = residual + hidden_states
+
+        outputs = (hidden_states,)
+        if output_attentions:
+            outputs += (self_attn_weights,)
+
+        return outputs
 
 
 class Qwen2RMSNorm(nn.Module):
@@ -934,39 +975,6 @@ class Qwen2Model(Qwen2PreTrainedModel):
         # create position embeddings to be shared across the decoder layers
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
 
-        # create replica-specific position embeddings for cross-attention if enabled
-        replica_position_embeddings = None
-        if self.config.enable_replica_rope:
-            batch_size = hidden_states.size(0) // self.config.parscale_n
-            seq_len = hidden_states.size(1)
-
-            # Create replica position IDs: each replica gets its replica_idx as position
-            replica_position_ids = (
-                torch.arange(
-                    self.config.parscale_n,
-                    device=hidden_states.device,
-                    dtype=torch.long,
-                )
-                .unsqueeze(0)
-                .expand(batch_size, -1)
-            )
-
-            # Generate RoPE embeddings for replica positions
-            replica_cos, replica_sin = self.rotary_emb(
-                hidden_states[:batch_size], replica_position_ids
-            )
-
-            # Reshape to (batch_size, parscale_n, 1, head_dim) and expand to sequence length
-            head_dim = self.config.hidden_size // self.config.num_attention_heads
-            replica_cos = replica_cos.view(
-                batch_size, self.config.parscale_n, 1, head_dim
-            ).expand(-1, -1, seq_len, -1)
-            replica_sin = replica_sin.view(
-                batch_size, self.config.parscale_n, 1, head_dim
-            ).expand(-1, -1, seq_len, -1)
-
-            replica_position_embeddings = (replica_cos, replica_sin)
-
         # decoder layers
         all_hidden_states = () if output_hidden_states else None
         all_self_attns = () if output_attentions else None
@@ -986,7 +994,6 @@ class Qwen2Model(Qwen2PreTrainedModel):
                     use_cache,
                     cache_position,
                     position_embeddings,
-                    replica_position_embeddings,
                 )
             else:
                 layer_outputs = decoder_layer(
@@ -998,7 +1005,6 @@ class Qwen2Model(Qwen2PreTrainedModel):
                     use_cache=use_cache,
                     cache_position=cache_position,
                     position_embeddings=position_embeddings,
-                    replica_position_embeddings=replica_position_embeddings,
                     **flash_attn_kwargs,
                 )
 
