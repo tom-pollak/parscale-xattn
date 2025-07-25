@@ -793,7 +793,7 @@ class Qwen2Model(Qwen2PreTrainedModel):
                 torch.nn.SiLU(),
                 torch.nn.Linear(config.hidden_size, config.parscale_n),
             )
-            if config.enable_cross_attn:
+            if config.enable_cross_attn and config.parscale_enable_replica_rope:
                 # Rotary embedding for cross-replica attention
                 replica_rope_config = copy.deepcopy(config)
                 replica_rope_config.max_position_embeddings = config.parscale_n
@@ -913,7 +913,7 @@ class Qwen2Model(Qwen2PreTrainedModel):
 
         # create replica-specific position embeddings for cross-attention if enabled
         replica_position_embeddings = None
-        if self.config.enable_cross_attn:
+        if self.config.enable_cross_attn and self.config.parscale_enable_replica_rope:
             batch_size = hidden_states.size(0) // self.config.parscale_n
             # Create replica position IDs: each replica gets its replica_idx as position
             replica_position_ids = (
