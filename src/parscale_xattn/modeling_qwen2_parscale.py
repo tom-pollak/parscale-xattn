@@ -164,16 +164,18 @@ class ParscaleCache(DynamicCache):
         cache_kwargs: Optional[Dict[str, Any]] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         if self.key_cache[layer_idx].size(0) != key_states.size(0):
-            # first time generation
+            # first time generation - expand cache from (parscale_n, heads, seq, dim) 
+            # to (parscale_n * batch_size, heads, seq, dim)
+            batch_size = key_states.size(0) // self.parscale_n
             self.key_cache[layer_idx] = repeat(
                 self.key_cache[layer_idx],
-                "n_parscale ... -> (n_parscale b) ...",
-                b=key_states.size(0) // self.parscale_n,
+                "p h s d -> (p b) h s d",
+                b=batch_size,
             )
             self.value_cache[layer_idx] = repeat(
                 self.value_cache[layer_idx],
-                "n_parscale ... -> (n_parscale b) ...",
-                b=key_states.size(0) // self.parscale_n,
+                "p h s d -> (p b) h s d", 
+                b=batch_size,
             )
         return super().update(key_states, value_states, layer_idx, cache_kwargs)
 
