@@ -104,7 +104,7 @@ def convert_qwen2_to_parscale(
             base_layer.post_attention_layernorm.state_dict()
         )
 
-        if config.parscale_n > 1:
+        if config.parscale_n > 1 and config.parscale_n_tokens > 0:
             torch.nn.init.normal_(
                 parscale_layer.self_attn.prefix_k, std=config.initializer_range
             )
@@ -132,7 +132,11 @@ def proc_dataset(dataset_name):
                 streaming=True,
             )
         case "debug":
-            return load_dataset("roneneldan/TinyStories", split="train", streaming=False)
+            return load_dataset(
+                "roneneldan/TinyStories",
+                split="train",
+                streaming=False,
+            )
         case _:
             raise ValueError("invalid name", dataset_name)
 
@@ -201,7 +205,8 @@ def main():
             num_hidden_layers=2,
             num_attention_heads=2,
             num_key_value_heads=2,
-            max_position_embeddings=config.training.max_length + config.parscale.parscale_n_tokens,
+            max_position_embeddings=config.training.max_length
+            + config.parscale.parscale_n_tokens,
             parscale_n=config.parscale.parscale_n,
             parscale_n_tokens=config.parscale.parscale_n_tokens,
             enable_cross_attn=config.parscale.enable_cross_attn,
