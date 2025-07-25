@@ -82,6 +82,7 @@ def convert_qwen2_to_parscale(
         enable_cross_attn=parscale_config.enable_cross_attn,
         parscale_cross_attn_layers=parscale_config.parscale_cross_attn_layers,
         enable_replica_rope=parscale_config.enable_replica_rope,
+        torch_dtype=base_config.torch_dtype,
     )
 
     parscale_model = Qwen2ParScaleForCausalLM(config)
