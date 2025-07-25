@@ -276,9 +276,6 @@ class Qwen2Attention(nn.Module):
                     dtype=attention_mask.dtype,
                     device=attention_mask.device,
                 )
-                prefix_mask, attention_mask = _unify_tensor_types(
-                    prefix_mask, attention_mask
-                )
                 attention_mask = torch.cat([prefix_mask, attention_mask], dim=3)
 
             if query_states.size(2) != 1:
@@ -292,9 +289,6 @@ class Qwen2Attention(nn.Module):
                     dtype=query_states.dtype,
                     device=query_states.device,
                 )
-                prefix_query, query_states = _unify_tensor_types(
-                    prefix_query, query_states
-                )
                 query_states = torch.cat([prefix_query, query_states], dim=2)
                 if attention_mask is not None:
                     prefix_mask_2d = torch.zeros(
@@ -306,9 +300,6 @@ class Qwen2Attention(nn.Module):
                         ),
                         dtype=attention_mask.dtype,
                         device=attention_mask.device,
-                    )
-                    prefix_mask_2d, attention_mask = _unify_tensor_types(
-                        prefix_mask_2d, attention_mask
                     )
                     attention_mask = torch.cat([prefix_mask_2d, attention_mask], dim=2)
 
