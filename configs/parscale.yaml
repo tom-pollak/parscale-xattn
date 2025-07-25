@@ -1,5 +1,5 @@
 parscale:
-  parscale_n: 1
+  parscale_n: 4
 
 training:
-  output_dir: "./models/basic"
+  output_dir: "./models/parscale"

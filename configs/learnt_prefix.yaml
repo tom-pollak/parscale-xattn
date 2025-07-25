@@ -1,8 +1,0 @@
-parscale:
-  parscale_n: 4
-  parscale_n_tokens: 48
-  enable_cross_attn: false
-  enable_replica_rope: false
-
-training:
-  output_dir: "./models/learnt-prefix"
