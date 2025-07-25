@@ -444,7 +444,7 @@ class CrossReplicaAttention(nn.Module):
 
         # Reshape back to original format: (b*s, h, p, d_h) -> (p*b, s, d)
         attn_output = rearrange(
-            attn_output, "(b s) h p d_h -> (p b) s (h p d_h)", b=b, s=s
+            attn_output, "(b s) h p d_h -> (p b) s (h d_h)", p=p, b=b, s=s
         )
 
         attn_output = self.o_proj(attn_output)
