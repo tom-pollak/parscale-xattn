@@ -22,7 +22,7 @@ from src.parscale_xattn import Qwen2ParScaleConfig, Qwen2ParScaleForCausalLM
 
 @dataclass
 class ParScaleConfig:
-    parscale_n: int = 4
+    parscale_n: int = 1
     parscale_n_tokens: int = 48
     enable_cross_attn: bool = False
     parscale_cross_attn_layers: Optional[list[int]] = None
