@@ -218,17 +218,20 @@ class Qwen2Attention(nn.Module):
         self.o_proj = nn.Linear(
             config.num_attention_heads * self.head_dim, config.hidden_size, bias=False
         )
-        
+
         # Initialize cross-attention projection layer if cross-attention is enabled
-        if config.parscale_n > 1 and config.enable_cross_attn:
-            cross_attn_input_size = config.parscale_n * config.num_attention_heads * self.head_dim
-            self.cross_attn_proj = nn.Linear(
-                cross_attn_input_size,
-                config.hidden_size,
-                bias=False
+        # Note: config validation ensures enable_cross_attn implies parscale_n > 1
+        if config.enable_cross_attn:
+            cross_attn_input_size = (
+                config.parscale_n * config.num_attention_heads * self.head_dim
             )
-        
-        if config.parscale_n > 1 and config.parscale_n_tokens > 0:
+            self.cross_attn_proj = nn.Linear(
+                cross_attn_input_size, config.hidden_size, bias=False
+            )
+
+        # Initialize prefix tokens if enabled
+        # Note: config validation ensures parscale_n_tokens > 0 implies parscale_n > 1
+        if config.parscale_n_tokens > 0:
             self.prefix_k = nn.Parameter(
                 torch.empty(
                     (
@@ -253,29 +256,30 @@ class Qwen2Attention(nn.Module):
     def _apply_cross_attention(self, query_states, key_states, value_states):
         """
         Apply cross-attention transformation to query, key, and value states.
-        
+
         Transforms tensors from (parscale_n * batch_size, num_heads, seq_len, head_dim)
         to (parscale_n * batch_size, num_heads, seq_len, parscale_n * head_dim)
         by concatenating features from all replicas for each position.
         """
+
         # Process all three tensors in parallel with the same transformation
         def transform_tensor(tensor):
             # Direct transformation: (p*b, h, s, d) -> (p*b, h, s, p*d)
             p, b = self.config.parscale_n, tensor.size(0) // self.config.parscale_n
-            
+
             # Reshape to separate replica dimension: (p*b, h, s, d) -> (b, p, h, s, d)
             reshaped = rearrange(tensor, "(p b) h s d -> b p h s d", p=p)
-            
+
             # Concatenate replicas in feature dimension: (b, p, h, s, d) -> (b, h, s, p*d)
             concat = rearrange(reshaped, "b p h s d -> b h s (p d)")
-            
+
             # Expand back to all replicas: (b, h, s, p*d) -> (p*b, h, s, p*d)
             return repeat(concat, "b h s d -> (p b) h s d", p=p)
-        
+
         return (
             transform_tensor(query_states),
             transform_tensor(key_states),
-            transform_tensor(value_states)
+            transform_tensor(value_states),
         )
 
     def forward(
@@ -418,18 +422,42 @@ class Qwen2Attention(nn.Module):
 
         if self.config.parscale_n_tokens > 0 and query_states.size(2) != 1:
             # Remove the prefix part
-            attn_output = attn_output[:, self.config.parscale_n_tokens:]
+            attn_output = attn_output[:, self.config.parscale_n_tokens :]
 
-        # Handle output projection
-        if self.config.parscale_n > 1 and use_cross_attn:
+        # Handle output projection with dimension validation
+        # Note: use_cross_attn can only be True when parscale_n > 1 (enforced by config validation)
+        if use_cross_attn:
             # Cross-attention: project expanded features back to hidden_size
             attn_output = attn_output.reshape(*input_shape, -1).contiguous()
             batch_seq_size = attn_output.size(0) * attn_output.size(1)
-            attn_output = self.cross_attn_proj(attn_output.view(batch_seq_size, -1))
+            flattened_output = attn_output.view(batch_seq_size, -1)
+
+            # Assert tensor dimensions match cross-attention projection expectations
+            expected_cross_dim = (
+                self.config.parscale_n * self.config.num_attention_heads * self.head_dim
+            )
+            actual_dim = flattened_output.size(-1)
+            assert actual_dim == expected_cross_dim, (
+                f"Cross-attention tensor dimension mismatch: expected {expected_cross_dim}, "
+                f"got {actual_dim}. This suggests inconsistent cross-attention state."
+            )
+
+            attn_output = self.cross_attn_proj(flattened_output)
             attn_output = attn_output.view(*input_shape, self.config.hidden_size)
         else:
             # Standard attention: use regular output projection
             attn_output = attn_output.reshape(*input_shape, -1).contiguous()
+            flattened_output = attn_output.view(-1, attn_output.size(-1))
+
+            # Assert tensor dimensions match standard projection expectations
+            expected_std_dim = self.config.num_attention_heads * self.head_dim
+            actual_dim = flattened_output.size(-1)
+            assert actual_dim == expected_std_dim, (
+                f"Standard attention tensor dimension mismatch: expected {expected_std_dim}, "
+                f"got {actual_dim}. This suggests cross-attention contamination when parscale_n={self.config.parscale_n}, "
+                f"use_cross_attn={use_cross_attn}, layer_idx={self.layer_idx}"
+            )
+
             attn_output = self.o_proj(attn_output)
         return attn_output, attn_weights
 
@@ -841,14 +869,24 @@ class Qwen2Model(Qwen2PreTrainedModel):
                     empty_prefix_v = []
                     for layer in self.layers:
                         empty_k = torch.zeros(
-                            (self.config.parscale_n, self.config.num_key_value_heads, 0, layer.self_attn.head_dim),
+                            (
+                                self.config.parscale_n,
+                                self.config.num_key_value_heads,
+                                0,
+                                layer.self_attn.head_dim,
+                            ),
                             device=next(layer.parameters()).device,
-                            dtype=next(layer.parameters()).dtype
+                            dtype=next(layer.parameters()).dtype,
                         )
                         empty_v = torch.zeros(
-                            (self.config.parscale_n, self.config.num_key_value_heads, 0, layer.self_attn.head_dim),
+                            (
+                                self.config.parscale_n,
+                                self.config.num_key_value_heads,
+                                0,
+                                layer.self_attn.head_dim,
+                            ),
                             device=next(layer.parameters()).device,
-                            dtype=next(layer.parameters()).dtype
+                            dtype=next(layer.parameters()).dtype,
                         )
                         empty_prefix_k.append(empty_k)
                         empty_prefix_v.append(empty_v)

@@ -199,7 +199,68 @@ class Qwen2ParScaleConfig(PretrainedConfig):
             self.rope_scaling["rope_type"] = self.rope_scaling["type"]
         rope_config_validation(self)
 
+        self._validate_parscale_config()
+
         super().__init__(
             tie_word_embeddings=tie_word_embeddings,
             **kwargs,
         )
+
+    def _validate_parscale_config(self):
+        """Validate ParScale-specific configuration parameters."""
+        # Basic bounds checking
+        if self.parscale_n < 1:
+            raise ValueError(f"parscale_n must be >= 1, got {self.parscale_n}")
+
+        if self.parscale_n_tokens < 0:
+            raise ValueError(
+                f"parscale_n_tokens must be >= 0, got {self.parscale_n_tokens}"
+            )
+
+        # Cross-attention validation
+        if self.enable_cross_attn and self.parscale_n == 1:
+            raise ValueError(
+                "Cross-attention (enable_cross_attn=True) requires parscale_n > 1, "
+                f"but got parscale_n={self.parscale_n}. Either disable cross-attention "
+                "or increase parscale_n."
+            )
+
+        # When parscale_n=1, enforce standard Qwen2 behavior
+        if self.parscale_n == 1:
+            if self.enable_cross_attn:
+                raise ValueError(
+                    f"Cross-attention should be disabled when parscale_n=1, "
+                    f"but enable_cross_attn={self.enable_cross_attn}"
+                )
+            if self.parscale_n_tokens > 0:
+                raise ValueError(
+                    f"Prefix tokens should be 0 when parscale_n=1 (standard Qwen2 mode), "
+                    f"but parscale_n_tokens={self.parscale_n_tokens}"
+                )
+
+        # Cross-attention layers validation
+        if self.parscale_cross_attn_layers is not None:
+            if not self.enable_cross_attn:
+                raise ValueError(
+                    "parscale_cross_attn_layers is specified but enable_cross_attn=False. "
+                    "Either enable cross-attention or set parscale_cross_attn_layers=None."
+                )
+
+            if not isinstance(self.parscale_cross_attn_layers, (list, tuple)):
+                raise ValueError(
+                    f"parscale_cross_attn_layers must be a list or tuple, "
+                    f"got {type(self.parscale_cross_attn_layers)}"
+                )
+
+            # Check layer indices are valid
+            for layer_idx in self.parscale_cross_attn_layers:
+                if not isinstance(layer_idx, int) or layer_idx < 0:
+                    raise ValueError(
+                        f"All layer indices in parscale_cross_attn_layers must be non-negative integers, "
+                        f"got {layer_idx}"
+                    )
+                if layer_idx >= self.num_hidden_layers:
+                    raise ValueError(
+                        f"Layer index {layer_idx} in parscale_cross_attn_layers is >= num_hidden_layers "
+                        f"({self.num_hidden_layers})"
+                    )
