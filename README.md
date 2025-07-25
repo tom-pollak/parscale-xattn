@@ -1,21 +1,3 @@
-```
-[rank0]: torch._dynamo.exc.TorchRuntimeError: Dynamo failed to run FX node with fake tensors: call_function <function repeat at 0x7284163e3560>(*(DTensor(local_tensor=FakeTensor(..., device='cuda:0',
-size=(1, 2, 48, 128)), device_mesh=DeviceMesh('cuda', [0, 1, 2, 3, 4, 5, 6, 7]), placements=(Shard(dim=0),)), 'n_parscale ... -> (n_parscale b) ...'), **{'b': 4}): got RuntimeError("shape '[2, 2, 48,
-128]' is invalid for input of size 49152")
-
-[rank0]: from user code:
-[rank0]:    File "/lambda/nfs/nethome-us-east-1/tomp/parscale-xattn/src/parscale_xattn/modeling_qwen2_parscale.py", line 500, in forward
-[rank0]:     hidden_states, self_attn_weights = self.self_attn(
-[rank0]:   File "/lambda/nfs/nethome-us-east-1/tomp/parscale-xattn/.venv/lib/python3.12/site-packages/torch/distributed/algorithms/_checkpoint/checkpoint_wrapper.py", line 171, in forward
-[rank0]:     return self.checkpoint_fn(  # type: ignore[misc]
-[rank0]:   File "/lambda/nfs/nethome-us-east-1/tomp/parscale-xattn/src/parscale_xattn/modeling_qwen2_parscale.py", line 267, in forward
-[rank0]:     key_states, value_states = past_key_value.update(
-[rank0]:   File "/lambda/nfs/nethome-us-east-1/tomp/parscale-xattn/src/parscale_xattn/modeling_qwen2_parscale.py", line 168, in update
-[rank0]:     self.key_cache[layer_idx] = repeat(
-
-[rank0]: Set TORCHDYNAMO_VERBOSE=1 for the internal stack trace (please do this especially if you're reporting a bug to PyTorch). For even more developer context, set TORCH_LOGS="+dynamo"
-```
-
 # ParScale Cross-Attention Extension
 
 PARSCALE introduces the third scaling paradigm for scaling LLMs: leverages parallel computation during both training and inference time (Parallel Scaling, or ParScale).
