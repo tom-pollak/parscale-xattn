@@ -38,15 +38,32 @@ from .configuration_qwen2_parscale import Qwen2ParScaleConfig
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 
-def _replicate_if_dtensor(tensor_to_replicate, reference_tensor):
-    if isinstance(reference_tensor, DTensor):
-        return DTensor.from_local(
-            tensor_to_replicate.to(reference_tensor.device),
-            reference_tensor.device_mesh,
-            [Replicate()] * reference_tensor.device_mesh.ndim,
-            run_check=False
+def _unify_tensor_types(tensor1, tensor2):
+    """
+    Ensures that two tensors are of the same type (either both torch.Tensor or both DTensor).
+    If one is a DTensor and the other is a regular Tensor, the regular Tensor is converted to a DTensor.
+    """
+    from torch.distributed.tensor import DTensor, Replicate
+
+    is_tensor1_dt = isinstance(tensor1, DTensor)
+    is_tensor2_dt = isinstance(tensor2, DTensor)
+
+    if is_tensor1_dt and not is_tensor2_dt:
+        tensor2 = DTensor.from_local(
+            tensor2.to(tensor1.device),
+            tensor1.device_mesh,
+            [Replicate()] * tensor1.device_mesh.ndim,
+            run_check=False,
         )
-    return tensor_to_replicate
+    elif not is_tensor1_dt and is_tensor2_dt:
+        tensor1 = DTensor.from_local(
+            tensor1.to(tensor2.device),
+            tensor2.device_mesh,
+            [Replicate()] * tensor2.device_mesh.ndim,
+            run_check=False,
+        )
+
+    return tensor1, tensor2
 
 
 logger = logging.get_logger(__name__)
@@ -179,20 +196,27 @@ class ParscaleCache(DynamicCache):
             # first time generation - expand cache from (parscale_n, heads, seq, dim)
             # to (parscale_n * batch_size, heads, seq, dim)
             batch_size = key_states.size(0) // self.parscale_n
-            self.key_cache[layer_idx] = self.key_cache[layer_idx].repeat(batch_size, 1, 1, 1)
-            self.value_cache[layer_idx] = self.value_cache[layer_idx].repeat(batch_size, 1, 1, 1)
+            self.key_cache[layer_idx] = self.key_cache[layer_idx].repeat(
+                batch_size, 1, 1, 1
+            )
+            self.value_cache[layer_idx] = self.value_cache[layer_idx].repeat(
+                batch_size, 1, 1, 1
+            )
 
         from torch.distributed.tensor import DTensor
-        if isinstance(key_states, DTensor) and not isinstance(self.key_cache[layer_idx], DTensor):
-            self.key_cache[layer_idx] = _replicate_if_dtensor(self.key_cache[layer_idx], key_states)
-            self.value_cache[layer_idx] = _replicate_if_dtensor(self.value_cache[layer_idx], value_states)
 
-        # Explicitly inline the logic from the parent `DynamicCache.update` method instead of calling `super().update()`.
-        # This is a workaround for a `torch.compile` issue where the `super()` call was causing a `RuntimeError`
-        # due to mixed `torch.Tensor` and `DTensor` types when running with FSDP. Making the `torch.cat` operation
-        # explicit in this method helps the compiler correctly handle the tensor types.
-        self.key_cache[layer_idx] = torch.cat([self.key_cache[layer_idx], key_states], dim=-2)
-        self.value_cache[layer_idx] = torch.cat([self.value_cache[layer_idx], value_states], dim=-2)
+        # Under FSDP + gradient checkpointing, the cache and the new states can have mismatched types
+        # (e.g., cache is DTensor, new state is Tensor, or vice-versa). We must ensure they are the
+        # same type before concatenation.
+        key_cache, key_states = _unify_tensor_types(
+            self.key_cache[layer_idx], key_states
+        )
+        value_cache, value_states = _unify_tensor_types(
+            self.value_cache[layer_idx], value_states
+        )
+
+        self.key_cache[layer_idx] = torch.cat([key_cache, key_states], dim=-2)
+        self.value_cache[layer_idx] = torch.cat([value_cache, value_states], dim=-2)
 
         return self.key_cache[layer_idx], self.value_cache[layer_idx]
 
@@ -377,12 +401,9 @@ class Qwen2Attention(nn.Module):
             )
 
         # Cross-attention between same-position tokens across replicas
-        use_cross_attn = (
-            self.config.enable_cross_attn
-            and (
-                self.config.parscale_cross_attn_layers is None
-                or self.layer_idx in self.config.parscale_cross_attn_layers
-            )
+        use_cross_attn = self.config.enable_cross_attn and (
+            self.config.parscale_cross_attn_layers is None
+            or self.layer_idx in self.config.parscale_cross_attn_layers
         )
 
         if self.config.parscale_n > 1 and self.config.parscale_n_tokens > 0:
@@ -398,7 +419,9 @@ class Qwen2Attention(nn.Module):
                     dtype=attention_mask.dtype,
                     device=attention_mask.device,
                 )
-                prefix_mask = _replicate_if_dtensor(prefix_mask, attention_mask)
+                prefix_mask, attention_mask = _unify_tensor_types(
+                    prefix_mask, attention_mask
+                )
                 attention_mask = torch.cat([prefix_mask, attention_mask], dim=3)
 
             if query_states.size(2) != 1:
@@ -412,7 +435,9 @@ class Qwen2Attention(nn.Module):
                     dtype=query_states.dtype,
                     device=query_states.device,
                 )
-                prefix_query = _replicate_if_dtensor(prefix_query, query_states)
+                prefix_query, query_states = _unify_tensor_types(
+                    prefix_query, query_states
+                )
                 query_states = torch.cat([prefix_query, query_states], dim=2)
                 if attention_mask is not None:
                     prefix_mask_2d = torch.zeros(
@@ -425,7 +450,9 @@ class Qwen2Attention(nn.Module):
                         dtype=attention_mask.dtype,
                         device=attention_mask.device,
                     )
-                    prefix_mask_2d = _replicate_if_dtensor(prefix_mask_2d, attention_mask)
+                    prefix_mask_2d, attention_mask = _unify_tensor_types(
+                        prefix_mask_2d, attention_mask
+                    )
                     attention_mask = torch.cat([prefix_mask_2d, attention_mask], dim=2)
 
             if use_cross_attn:
@@ -913,7 +940,11 @@ class Qwen2Model(Qwen2PreTrainedModel):
 
             # The trained prefix is saved in layer.self_attn.prefix_k / layer.self_attn.prefix_v
             # We extract them to construct ParscaleCache.
-            if self.config.parscale_n_tokens > 0 and past_key_values is None or past_key_values.get_seq_length() == 0:
+            if (
+                self.config.parscale_n_tokens > 0
+                and past_key_values is None
+                or past_key_values.get_seq_length() == 0
+            ):
                 past_key_values = ParscaleCache(
                     [layer.self_attn.prefix_k for layer in self.layers],
                     [layer.self_attn.prefix_v for layer in self.layers],
