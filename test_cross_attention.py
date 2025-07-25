@@ -101,13 +101,13 @@ def test_standard_attention(seq_len=32, batch_size=2):
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("Cross-Attention Shape Mismatch Debug Script")
+    print("Cross-Attention Refactored Implementation Test")
     print("=" * 60)
     
     # Test standard attention first (should work)
     standard_success = test_standard_attention()
     
-    # Test cross-attention (should fail with current bug)
+    # Test cross-attention with refactored implementation
     cross_success = test_cross_attention_shapes(parscale_n=4)
     
     print("\n" + "=" * 60)
@@ -115,6 +115,10 @@ if __name__ == "__main__":
     print(f"Standard attention (parscale_n=1): {'✅ PASS' if standard_success else '❌ FAIL'}")
     print(f"Cross attention (parscale_n=4): {'✅ PASS' if cross_success else '❌ FAIL'}")
     
-    if not cross_success and standard_success:
-        print("\n🔍 This confirms the cross-attention shape mismatch issue.")
-        print("Run this script after applying the fix to verify it's resolved.")
+    if cross_success and standard_success:
+        print("\n🎉 Both standard and cross-attention work correctly!")
+        print("✅ Refactored cross-attention implementation is successful.")
+    elif not cross_success and standard_success:
+        print("\n🔍 Cross-attention still has issues - needs further debugging.")
+    else:
+        print("\n❌ Both implementations have issues - check basic model setup.")
