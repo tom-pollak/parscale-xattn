@@ -483,7 +483,11 @@ class Qwen2DecoderLayer(nn.Module):
         )
         self.config = config
         self.layer_idx = layer_idx
-        if self.config.enable_cross_attn:
+        self.enable_cross_attn = config.enable_cross_attn and (
+            self.config.parscale_cross_attn_layers is None
+            or self.layer_idx in self.config.parscale_cross_attn_layers
+        )
+        if self.enable_cross_attn:
             self.cross_replica_attn = CrossReplicaAttention(config)
             self.cross_replica_layernorm = Qwen2RMSNorm(
                 config.hidden_size, eps=config.rms_norm_eps
@@ -514,8 +518,15 @@ class Qwen2DecoderLayer(nn.Module):
     ) -> Tuple[
         torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]
     ]:
-        residual = hidden_states
+        if self.enable_cross_attn:
+            residual = hidden_states
+            hidden_states = self.cross_replica_layernorm(hidden_states)
+            hidden_states = self.cross_replica_attn(
+                hidden_states, replica_position_embeddings
+            )
+            hidden_states = residual + hidden_states
 
+        residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
 
         # Self Attention
@@ -531,18 +542,6 @@ class Qwen2DecoderLayer(nn.Module):
             **kwargs,
         )
         hidden_states = residual + hidden_states
-
-        # Cross-Replica Attention
-        if self.config.enable_cross_attn and (
-            self.config.parscale_cross_attn_layers is None
-            or self.layer_idx in self.config.parscale_cross_attn_layers
-        ):
-            residual = hidden_states
-            hidden_states = self.cross_replica_layernorm(hidden_states)
-            hidden_states = self.cross_replica_attn(
-                hidden_states, replica_position_embeddings
-            )
-            hidden_states = residual + hidden_states
 
         # Fully Connected
         residual = hidden_states
@@ -575,73 +574,6 @@ class Qwen2RMSNorm(nn.Module):
 
     def extra_repr(self):
         return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
-
-
-class Qwen2DecoderLayer(nn.Module):
-    def __init__(self, config: Qwen2ParScaleConfig, layer_idx: int):
-        super().__init__()
-        self.hidden_size = config.hidden_size
-        self.self_attn = Qwen2Attention(config=config, layer_idx=layer_idx)
-        self.mlp = Qwen2MLP(config)
-        self.input_layernorm = Qwen2RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.post_attention_layernorm = Qwen2RMSNorm(
-            config.hidden_size, eps=config.rms_norm_eps
-        )
-        if config.sliding_window and config._attn_implementation != "flash_attention_2":
-            logger.warning_once(
-                f"Sliding Window Attention is enabled but not implemented for `{config._attn_implementation}`; "
-                "unexpected results may be encountered."
-            )
-
-    def forward(
-        self,
-        hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[Cache] = None,
-        output_attentions: Optional[bool] = False,
-        use_cache: Optional[bool] = False,
-        cache_position: Optional[torch.LongTensor] = None,
-        position_embeddings: Optional[
-            Tuple[torch.Tensor, torch.Tensor]
-        ] = None,  # necessary, but kept here for BC
-        replica_position_embeddings: Optional[
-            Tuple[torch.Tensor, torch.Tensor]
-        ] = None,  # replica-specific RoPE embeddings for cross-attention
-        **kwargs: Unpack[FlashAttentionKwargs],
-    ) -> Tuple[
-        torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]
-    ]:
-        residual = hidden_states
-
-        hidden_states = self.input_layernorm(hidden_states)
-
-        # Self Attention
-        hidden_states, self_attn_weights = self.self_attn(
-            hidden_states=hidden_states,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            past_key_value=past_key_value,
-            output_attentions=output_attentions,
-            use_cache=use_cache,
-            cache_position=cache_position,
-            position_embeddings=position_embeddings,
-            replica_position_embeddings=replica_position_embeddings,
-            **kwargs,
-        )
-        hidden_states = residual + hidden_states
-
-        # Fully Connected
-        residual = hidden_states
-        hidden_states = self.post_attention_layernorm(hidden_states)
-        hidden_states = self.mlp(hidden_states)
-        hidden_states = residual + hidden_states
-
-        outputs = (hidden_states,)
-        if output_attentions:
-            outputs += (self_attn_weights,)
-
-        return outputs
 
 
 class Qwen2RotaryEmbedding(nn.Module):
