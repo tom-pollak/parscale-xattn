@@ -442,33 +442,12 @@ class CrossReplicaAttention(nn.Module):
             is_causal=False,
         )
 
-        # Reshape back to original format: (b*s, h, p, d_h) -> (p*b, s, d)
         attn_output = rearrange(
             attn_output, "(b s) h p d_h -> (p b) s (h d_h)", p=p, b=b, s=s
         )
 
         attn_output = self.o_proj(attn_output)
         return attn_output
-
-
-class Qwen2RMSNorm(nn.Module):
-    def __init__(self, hidden_size, eps=1e-6):
-        """
-        Qwen2RMSNorm is equivalent to T5LayerNorm
-        """
-        super().__init__()
-        self.weight = nn.Parameter(torch.ones(hidden_size))
-        self.variance_epsilon = eps
-
-    def forward(self, hidden_states):
-        input_dtype = hidden_states.dtype
-        hidden_states = hidden_states.to(torch.float32)
-        variance = hidden_states.pow(2).mean(-1, keepdim=True)
-        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
-        return self.weight * hidden_states.to(input_dtype)
-
-    def extra_repr(self):
-        return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
 
 
 class Qwen2DecoderLayer(nn.Module):
@@ -488,10 +467,10 @@ class Qwen2DecoderLayer(nn.Module):
             or self.layer_idx in self.config.parscale_cross_attn_layers
         )
         if self.enable_cross_attn:
-            self.cross_replica_attn = CrossReplicaAttention(config)
             self.cross_replica_layernorm = Qwen2RMSNorm(
                 config.hidden_size, eps=config.rms_norm_eps
             )
+            self.cross_replica_attn = CrossReplicaAttention(config)
 
         if config.sliding_window and config._attn_implementation != "flash_attention_2":
             logger.warning_once(
