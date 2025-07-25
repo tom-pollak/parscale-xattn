@@ -130,6 +130,8 @@ def proc_dataset(dataset_name):
                 split="train",
                 streaming=True,
             )
+        case "dev":
+            return load_dataset("roneneldan/TinyStories", split="train", streaming=False)
         case _:
             raise ValueError("invalid name", dataset_name)
 
