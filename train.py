@@ -5,6 +5,7 @@ from typing import Optional
 import torch
 import wandb
 from accelerate import Accelerator
+from accelerate.utils import broadcast
 from datasets import load_dataset
 from omegaconf import OmegaConf, SCMode
 from pydantic import TypeAdapter
@@ -144,7 +145,33 @@ def proc_dataset(dataset_name):
             raise ValueError("invalid name", dataset_name)
 
 
-def mk_config() -> Config:
+def init_wandb(accelerator: Accelerator) -> dict:
+    """
+    Initialize wandb on main process and return wandb config dict for all processes.
+
+    Args:
+        accelerator: The Accelerator instance
+
+    Returns:
+        Dictionary of wandb config values
+    """
+    # Initialize on main process
+    if accelerator.is_main_process:
+        run = wandb.init(project=os.environ.get("WANDB_PROJECT", "parscale-xattn"))
+        os.environ["WANDB_RUN_ID"] = run.id
+        wandb_config = OmegaConf.from_dotlist(
+            [f"{k}={v}" for k, v in dict(wandb.config).items()]
+        )
+    else:
+        wandb_config = None
+
+    wandb_config = broadcast(wandb_config, from_process=0)
+    assert wandb_config is not None
+
+    return wandb_config
+
+
+def mk_config(wandb_config) -> Config:
     base_config: Config = OmegaConf.structured(Config)
     yaml_config = (
         OmegaConf.load(config_file)
@@ -152,9 +179,6 @@ def mk_config() -> Config:
         else {}
     )
     cli_config = OmegaConf.from_cli()
-    wandb_config = OmegaConf.from_dotlist(
-        [f"{k}={v}" for k, v in dict(wandb.config).items()]
-    )
 
     config = OmegaConf.merge(
         base_config,
@@ -174,7 +198,8 @@ def main():
     if accelerator.is_main_process:
         wandb.init(project=os.environ.get("WANDB_PROJECT", "parscale-xattn"))
 
-    config = mk_config()
+    wandb_config = init_wandb(accelerator)
+    config = mk_config(wandb_config)
 
     tokenizer = AutoTokenizer.from_pretrained(config.training.base_model)
     model = convert_qwen2_to_parscale(config.training.base_model, config.parscale)
@@ -214,7 +239,7 @@ def main():
         save_total_limit=config.training.save_total_limit,
         bf16=torch.cuda.is_available(),
         remove_unused_columns=False,
-        report_to="wandb",
+        report_to="wandb" if accelerator.is_main_process else "none",
         # Learning rate schedule - constant with warmup like paper's stage 2
         lr_scheduler_type="constant_with_warmup",
         # Multi-GPU setup
