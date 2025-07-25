@@ -5,6 +5,7 @@ If you are interested in how ParScale is implemented, please search for "parscal
 """
 
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+import copy
 
 import torch
 from einops import rearrange, repeat
@@ -380,7 +381,11 @@ class CrossReplicaAttention(nn.Module):
         self.o_proj = nn.Linear(self.hidden_size, self.hidden_size, bias=False)
         self.attention_dropout = config.attention_dropout
 
-    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        replica_position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+    ) -> torch.Tensor:
         # hidden_states: (p*b, s, d)
         p = self.parscale_n
         b, s, d = (
@@ -397,6 +402,27 @@ class CrossReplicaAttention(nn.Module):
         q = rearrange(q, "(p b) s (h d_h) -> (b s) p h d_h", p=p, h=self.num_heads)
         k = rearrange(k, "(p b) s (h d_h) -> (b s) p h d_h", p=p, h=self.num_heads)
         v = rearrange(v, "(p b) s (h d_h) -> (b s) p h d_h", p=p, h=self.num_heads)
+
+        # Apply RoPE if provided
+        if replica_position_embeddings is not None:
+            cos, sin = replica_position_embeddings
+            # cos/sin are (b, p, d_h). We need to reshape for (b*s, p, d_h)
+            # The embeddings are independent of sequence length, so we can just expand
+            cos = cos.unsqueeze(1).expand(-1, s, -1, -1).reshape(b * s, p, -1)
+            sin = sin.unsqueeze(1).expand(-1, s, -1, -1).reshape(b * s, p, -1)
+
+            # Reshape q/k for RoPE: (b*s, p, h, d_h) -> (b*s, h, p, d_h)
+            q_for_rope = q.transpose(1, 2)
+            k_for_rope = k.transpose(1, 2)
+
+            # Apply RoPE
+            q_for_rope, k_for_rope = apply_rotary_pos_emb(
+                q_for_rope, k_for_rope, cos, sin, unsqueeze_dim=1
+            )
+
+            # Reshape back: (b*s, h, p, d_h) -> (b*s, p, h, d_h)
+            q = q_for_rope.transpose(1, 2)
+            k = k_for_rope.transpose(1, 2)
 
         # Transpose for matmul: (b*s, h, p, d_h)
         q = q.transpose(1, 2)
@@ -485,6 +511,9 @@ class Qwen2DecoderLayer(nn.Module):
         position_embeddings: Optional[
             Tuple[torch.Tensor, torch.Tensor]
         ] = None,  # necessary, but kept here for BC
+        replica_position_embeddings: Optional[
+            Tuple[torch.Tensor, torch.Tensor]
+        ] = None,  # replica-specific RoPE embeddings for cross-attention
         **kwargs: Unpack[FlashAttentionKwargs],
     ) -> Tuple[
         torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]
@@ -514,7 +543,9 @@ class Qwen2DecoderLayer(nn.Module):
         ):
             residual = hidden_states
             hidden_states = self.cross_replica_layernorm(hidden_states)
-            hidden_states = self.cross_replica_attn(hidden_states)
+            hidden_states = self.cross_replica_attn(
+                hidden_states, replica_position_embeddings
+            )
             hidden_states = residual + hidden_states
 
         # Fully Connected
@@ -855,6 +886,13 @@ class Qwen2Model(Qwen2PreTrainedModel):
                 torch.nn.SiLU(),
                 torch.nn.Linear(config.hidden_size, config.parscale_n),
             )
+            if config.enable_cross_attn:
+                # Rotary embedding for cross-replica attention
+                replica_rope_config = copy.deepcopy(config)
+                replica_rope_config.max_position_embeddings = config.parscale_n
+                self.replica_rotary_emb = Qwen2RotaryEmbedding(
+                    config=replica_rope_config
+                )
         self.parscale_aggregate_attn_smoothing = config.parscale_attn_smooth
 
         # Initialize weights and apply final processing
@@ -966,6 +1004,34 @@ class Qwen2Model(Qwen2PreTrainedModel):
         # create position embeddings to be shared across the decoder layers
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
 
+        # create replica-specific position embeddings for cross-attention if enabled
+        replica_position_embeddings = None
+        if self.config.enable_cross_attn:
+            batch_size = hidden_states.size(0) // self.config.parscale_n
+            # Create replica position IDs: each replica gets its replica_idx as position
+            replica_position_ids = (
+                torch.arange(
+                    self.config.parscale_n,
+                    device=hidden_states.device,
+                    dtype=torch.long,
+                )
+                .unsqueeze(0)
+                .expand(batch_size, -1)
+            )
+
+            # Generate RoPE embeddings for replica positions
+            # Use a dummy tensor with the correct device and dtype for the embedding calculation
+            dummy_tensor = torch.empty(
+                batch_size,
+                self.config.parscale_n,
+                self.config.hidden_size,
+                device=hidden_states.device,
+                dtype=hidden_states.dtype,
+            )
+            replica_position_embeddings = self.replica_rotary_emb(
+                dummy_tensor, replica_position_ids
+            )
+
         # decoder layers
         all_hidden_states = () if output_hidden_states else None
         all_self_attns = () if output_attentions else None
@@ -985,6 +1051,7 @@ class Qwen2Model(Qwen2PreTrainedModel):
                     use_cache,
                     cache_position,
                     position_embeddings,
+                    replica_position_embeddings,
                 )
             else:
                 layer_outputs = decoder_layer(
@@ -996,6 +1063,7 @@ class Qwen2Model(Qwen2PreTrainedModel):
                     use_cache=use_cache,
                     cache_position=cache_position,
                     position_embeddings=position_embeddings,
+                    replica_position_embeddings=replica_position_embeddings,
                     **flash_attn_kwargs,
                 )
 
