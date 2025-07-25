@@ -427,7 +427,7 @@ class CrossReplicaAttention(nn.Module):
             # cos/sin are (b, p, d_h). We need to reshape for (b*s, p, d_h)
             cos = cos.unsqueeze(1).expand(-1, s, -1, -1).reshape(b * s, p, -1)
             sin = sin.unsqueeze(1).expand(-1, s, -1, -1).reshape(b * s, p, -1)
-            q, k = apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=2)
+            q, k = apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1)
 
         # Repeat K,V for GQA
         k = repeat_kv(k, self.num_key_value_groups)
