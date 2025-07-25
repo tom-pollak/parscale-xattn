@@ -205,7 +205,7 @@ def main():
             num_hidden_layers=12,
             num_attention_heads=32,
             num_key_value_heads=16,
-            max_position_embeddings=int(config.training.max_length * 1.5),
+            max_position_embeddings=10000,
             parscale_n=config.parscale.parscale_n,
             parscale_n_tokens=config.parscale.parscale_n_tokens,
             enable_cross_attn=config.parscale.enable_cross_attn,
