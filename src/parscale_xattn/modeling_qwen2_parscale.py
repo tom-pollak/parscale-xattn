@@ -42,6 +42,7 @@ def _unify_tensor_types(tensor1, tensor2):
     Ensures that two tensors are of the same type (either both torch.Tensor or both DTensor).
     If one is a DTensor and the other is a regular Tensor, the regular Tensor is converted to a DTensor.
     """
+    assert tensor1.dtype == tensor2.dtype
     is_tensor1_dt = isinstance(tensor1, DTensor)
     is_tensor2_dt = isinstance(tensor2, DTensor)
     if not (is_tensor1_dt | is_tensor2_dt):  # both local
@@ -52,14 +53,14 @@ def _unify_tensor_types(tensor1, tensor2):
             tensor2.to(tensor1.device),
             tensor1.device_mesh,
             [Replicate()] * tensor1.device_mesh.ndim,
-            run_check=False,
+            run_check=True,
         )
     elif is_tensor2_dt:
         tensor1 = DTensor.from_local(
             tensor1.to(tensor2.device),
             tensor2.device_mesh,
             [Replicate()] * tensor2.device_mesh.ndim,
-            run_check=False,
+            run_check=True,
         )
     return tensor1, tensor2
 
