@@ -61,29 +61,15 @@ def convert_qwen2_to_parscale(
     )
     base_config = base_model.config
 
-    config = Qwen2ParScaleConfig(
-        vocab_size=base_config.vocab_size,
-        hidden_size=base_config.hidden_size,
-        intermediate_size=base_config.intermediate_size,
-        num_hidden_layers=base_config.num_hidden_layers,
-        num_attention_heads=base_config.num_attention_heads,
-        num_key_value_heads=getattr(
-            base_config, "num_key_value_heads", base_config.num_attention_heads
-        ),
-        hidden_act=base_config.hidden_act,
-        max_position_embeddings=base_config.max_position_embeddings,
-        initializer_range=base_config.initializer_range,
-        rms_norm_eps=base_config.rms_norm_eps,
-        use_cache=base_config.use_cache,  # Disable KV caching during training - only needed for inference
-        tie_word_embeddings=getattr(base_config, "tie_word_embeddings", False),
-        rope_theta=getattr(base_config, "rope_theta", 10000.0),
+    config_dict = base_config.to_dict()
+    config_dict.update(
         parscale_n=parscale_config.parscale_n,
         parscale_n_tokens=parscale_config.parscale_n_tokens,
         enable_cross_attn=parscale_config.enable_cross_attn,
         parscale_cross_attn_layers=parscale_config.parscale_cross_attn_layers,
         enable_replica_rope=parscale_config.enable_replica_rope,
-        torch_dtype=base_config.torch_dtype,
     )
+    config = Qwen2ParScaleConfig(**config_dict)
 
     parscale_model = Qwen2ParScaleForCausalLM(config)
 
