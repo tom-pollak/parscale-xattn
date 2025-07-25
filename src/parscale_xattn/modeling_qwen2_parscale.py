@@ -910,45 +910,19 @@ class Qwen2Model(Qwen2PreTrainedModel):
 
             # The trained prefix is saved in layer.self_attn.prefix_k / layer.self_attn.prefix_v
             # We extract them to construct ParscaleCache.
-            if past_key_values is None or past_key_values.get_seq_length() == 0:
-                if self.config.parscale_n_tokens > 0:
-                    past_key_values = ParscaleCache(
-                        [layer.self_attn.prefix_k for layer in self.layers],
-                        [layer.self_attn.prefix_v for layer in self.layers],
-                    )
-                else:
-                    # Create empty prefix tensors when parscale_n_tokens=0
-                    empty_prefix_k = []
-                    empty_prefix_v = []
-                    for layer in self.layers:
-                        empty_k = torch.zeros(
-                            (
-                                self.config.parscale_n,
-                                self.config.num_key_value_heads,
-                                0,
-                                layer.self_attn.head_dim,
-                            ),
-                            device=next(layer.parameters()).device,
-                            dtype=next(layer.parameters()).dtype,
-                        )
-                        empty_v = torch.zeros(
-                            (
-                                self.config.parscale_n,
-                                self.config.num_key_value_heads,
-                                0,
-                                layer.self_attn.head_dim,
-                            ),
-                            device=next(layer.parameters()).device,
-                            dtype=next(layer.parameters()).dtype,
-                        )
-                        empty_prefix_k.append(empty_k)
-                        empty_prefix_v.append(empty_v)
-                    past_key_values = ParscaleCache(empty_prefix_k, empty_prefix_v)
+            if self.config.parscale_n_tokens > 0 and past_key_values is None or past_key_values.get_seq_length() == 0:
+                past_key_values = ParscaleCache(
+                    [layer.self_attn.prefix_k for layer in self.layers],
+                    [layer.self_attn.prefix_v for layer in self.layers],
+                )
+            else:
+                past_key_values = None
 
         if use_cache and past_key_values is None:
             past_key_values = DynamicCache()
 
         if cache_position is None:
+            assert past_key_values is not None
             past_seen_tokens = (
                 past_key_values.get_seq_length() if past_key_values is not None else 0
             )
