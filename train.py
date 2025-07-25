@@ -202,9 +202,9 @@ def main():
             vocab_size=tokenizer.vocab_size,
             hidden_size=64,
             intermediate_size=128,
-            num_hidden_layers=2,
-            num_attention_heads=2,
-            num_key_value_heads=2,
+            num_hidden_layers=12,
+            num_attention_heads=32,
+            num_key_value_heads=16,
             max_position_embeddings=config.training.max_length
             + config.parscale.parscale_n_tokens,
             parscale_n=config.parscale.parscale_n,
