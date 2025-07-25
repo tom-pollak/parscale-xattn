@@ -4,13 +4,12 @@ All modifications are wrapped within the condition 'parscale_n > 1'.
 If you are interested in how ParScale is implemented, please search for "parscale_n" in this file.
 """
 
-from typing import Callable, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
+from einops import rearrange, repeat
 from torch import nn
 from torch.distributed.tensor import DTensor, Replicate
-from einops import repeat, rearrange
-
 from transformers.activations import ACT2FN
 from transformers.cache_utils import Cache, DynamicCache, StaticCache
 from transformers.generation import GenerationMixin
@@ -34,8 +33,8 @@ from transformers.utils import (
     logging,
     replace_return_docstrings,
 )
+
 from .configuration_qwen2_parscale import Qwen2ParScaleConfig
-from typing import Any, Dict, List, Optional, Tuple, Union
 
 
 def _unify_tensor_types(tensor1, tensor2):
@@ -43,26 +42,25 @@ def _unify_tensor_types(tensor1, tensor2):
     Ensures that two tensors are of the same type (either both torch.Tensor or both DTensor).
     If one is a DTensor and the other is a regular Tensor, the regular Tensor is converted to a DTensor.
     """
-    from torch.distributed.tensor import DTensor, Replicate
-
     is_tensor1_dt = isinstance(tensor1, DTensor)
     is_tensor2_dt = isinstance(tensor2, DTensor)
+    if not (is_tensor1_dt | is_tensor2_dt):  # both local
+        return tensor1, tensor2
 
-    if is_tensor1_dt and not is_tensor2_dt:
+    if is_tensor1_dt:
         tensor2 = DTensor.from_local(
             tensor2.to(tensor1.device),
             tensor1.device_mesh,
             [Replicate()] * tensor1.device_mesh.ndim,
             run_check=False,
         )
-    elif not is_tensor1_dt and is_tensor2_dt:
+    elif is_tensor2_dt:
         tensor1 = DTensor.from_local(
             tensor1.to(tensor2.device),
             tensor2.device_mesh,
             [Replicate()] * tensor2.device_mesh.ndim,
             run_check=False,
         )
-
     return tensor1, tensor2
 
 
@@ -203,8 +201,6 @@ class ParscaleCache(DynamicCache):
                 batch_size, 1, 1, 1
             )
 
-        from torch.distributed.tensor import DTensor
-
         # Under FSDP + gradient checkpointing, the cache and the new states can have mismatched types
         # (e.g., cache is DTensor, new state is Tensor, or vice-versa). We must ensure they are the
         # same type before concatenation.
@@ -282,7 +278,8 @@ class Qwen2Attention(nn.Module):
                         config.num_key_value_heads,
                         config.parscale_n_tokens,
                         self.head_dim,
-                    )
+                    ),
+                    dtype=config.torch_dtype,
                 )
             )
             self.prefix_v = nn.Parameter(
@@ -292,7 +289,8 @@ class Qwen2Attention(nn.Module):
                         config.num_key_value_heads,
                         config.parscale_n_tokens,
                         self.head_dim,
-                    )
+                    ),
+                    dtype=config.torch_dtype,
                 )
             )
 
