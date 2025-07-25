@@ -163,11 +163,9 @@ def init_wandb(accelerator: Accelerator) -> dict:
             [f"{k}={v}" for k, v in dict(wandb.config).items()]
         )
     else:
-        wandb_config = None
+        wandb_config = {}
 
     wandb_config = broadcast(wandb_config, from_process=0)
-    assert wandb_config is not None
-
     return wandb_config
 
 
