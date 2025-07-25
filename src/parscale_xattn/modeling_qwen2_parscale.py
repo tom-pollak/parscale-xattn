@@ -9,7 +9,6 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import torch
 from einops import rearrange, repeat
 from torch import nn
-from torch.distributed.tensor import DTensor, Replicate
 from transformers.activations import ACT2FN
 from transformers.cache_utils import Cache, DynamicCache, StaticCache
 from transformers.generation import GenerationMixin
@@ -35,34 +34,6 @@ from transformers.utils import (
 )
 
 from .configuration_qwen2_parscale import Qwen2ParScaleConfig
-
-
-def _unify_tensor_types(tensor1, tensor2):
-    """
-    Ensures that two tensors are of the same type (either both torch.Tensor or both DTensor).
-    If one is a DTensor and the other is a regular Tensor, the regular Tensor is converted to a DTensor.
-    """
-    assert tensor1.dtype == tensor2.dtype, f"{tensor1.dtype=} != {tensor2.dtype=}"
-    is_tensor1_dt = isinstance(tensor1, DTensor)
-    is_tensor2_dt = isinstance(tensor2, DTensor)
-    if not (is_tensor1_dt | is_tensor2_dt):  # both local
-        return tensor1, tensor2
-
-    if is_tensor1_dt:
-        tensor2 = DTensor.from_local(
-            tensor2.to(tensor1.device),
-            tensor1.device_mesh,
-            [Replicate()] * tensor1.device_mesh.ndim,
-            run_check=True,
-        )
-    elif is_tensor2_dt:
-        tensor1 = DTensor.from_local(
-            tensor1.to(tensor2.device),
-            tensor2.device_mesh,
-            [Replicate()] * tensor2.device_mesh.ndim,
-            run_check=True,
-        )
-    return tensor1, tensor2
 
 
 logger = logging.get_logger(__name__)
@@ -176,15 +147,11 @@ def eager_attention_forward(
 class ParscaleCache(DynamicCache):
     def __init__(self, prefix_k, prefix_v) -> None:
         super().__init__()
+        self._seen_tokens = 0  # Used in `generate` to keep tally of how many tokens the cache has seen
+        self.key_cache: List[torch.Tensor] = prefix_k
+        self.value_cache: List[torch.Tensor] = prefix_v
         self.parscale_n = prefix_k[0].size(0)
         self.n_prefix_tokens = prefix_k[0].size(2)
-
-        # Initialize key_cache and value_cache with prefix tokens
-        self.key_cache: List[torch.Tensor] = [pk.clone() for pk in prefix_k]
-        self.value_cache: List[torch.Tensor] = [pv.clone() for pv in prefix_v]
-
-        # _seen_tokens should reflect the current length of the cache, including prefix
-        self._seen_tokens = self.n_prefix_tokens
 
     def update(
         self,
@@ -194,43 +161,33 @@ class ParscaleCache(DynamicCache):
         cache_kwargs: Optional[Dict[str, Any]] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         if self.key_cache[layer_idx].size(0) != key_states.size(0):
-            # first time generation - expand cache from (parscale_n, heads, seq, dim)
-            # to (parscale_n * batch_size, heads, seq, dim)
-            batch_size = key_states.size(0) // self.parscale_n
-            self.key_cache[layer_idx] = self.key_cache[layer_idx].repeat(
-                batch_size, 1, 1, 1
+            # first time generation
+            self.key_cache[layer_idx] = repeat(
+                self.key_cache[layer_idx],
+                "n_parscale ... -> (n_parscale b) ...",
+                b=key_states.size(0) // self.parscale_n,
             )
-            self.value_cache[layer_idx] = self.value_cache[layer_idx].repeat(
-                batch_size, 1, 1, 1
+            self.value_cache[layer_idx] = repeat(
+                self.value_cache[layer_idx],
+                "n_parscale ... -> (n_parscale b) ...",
+                b=key_states.size(0) // self.parscale_n,
             )
-
-        # Under FSDP + gradient checkpointing, the cache and the new states can have mismatched types
-        # (e.g., cache is DTensor, new state is Tensor, or vice-versa). We must ensure they are the
-        # same type before concatenation.
-        key_cache, key_states = _unify_tensor_types(
-            self.key_cache[layer_idx], key_states
-        )
-        value_cache, value_states = _unify_tensor_types(
-            self.value_cache[layer_idx], value_states
-        )
-
-        self.key_cache[layer_idx] = torch.cat([key_cache, key_states], dim=-2)
-        self.value_cache[layer_idx] = torch.cat([value_cache, value_states], dim=-2)
-
-        # Update _seen_tokens to reflect the new total length
-        self._seen_tokens = self.key_cache[layer_idx].shape[-2]
-
-        return self.key_cache[layer_idx], self.value_cache[layer_idx]
+        return super().update(key_states, value_states, layer_idx, cache_kwargs)
 
     def get_seq_length(self, layer_idx=0):
-        # get_seq_length should return the actual length of the cache
-        return self.key_cache[layer_idx].shape[-2]
+        seq_len = super().get_seq_length(layer_idx)
+        if seq_len != 0:
+            seq_len -= self.n_prefix_tokens
+        return seq_len
 
     def reorder_cache(self, beam_idx: torch.LongTensor):
         """Reorders the cache for beam search, given the selected beam indices."""
         b = self.key_cache[0].size(0) // self.parscale_n
         beam_idx = torch.cat([beam_idx + b * i for i in range(self.parscale_n)])
         super().reorder_cache(beam_idx)
+
+
+
 
 
 class Qwen2Attention(nn.Module):
@@ -937,31 +894,27 @@ class Qwen2Model(Qwen2PreTrainedModel):
                     position_ids, "b s -> (n_parscale b) s", n_parscale=self.parscale_n
                 )
 
-        # Initialize or update past_key_values
-        if past_key_values is None:
+            # If we have a learnt prefix, we use ParscaleCache
             if self.config.parscale_n_tokens > 0:
-                past_key_values = ParscaleCache(
-                    [layer.self_attn.prefix_k for layer in self.layers],
-                    [layer.self_attn.prefix_v for layer in self.layers],
-                )
-            elif use_cache:
-                past_key_values = DynamicCache()
+                # The trained prefix is saved in layer.self_attn.prefix_k / layer.self_attn.prefix_v
+                # We extract them to construct ParscaleCache.
+                if past_key_values is None or past_key_values.get_seq_length() == 0:
+                    past_key_values = ParscaleCache(
+                        [layer.self_attn.prefix_k for layer in self.layers],
+                        [layer.self_attn.prefix_v for layer in self.layers],
+                    )
+
+        # Standard Hugging Face cache initialization
+        if use_cache and past_key_values is None:
+            past_key_values = DynamicCache()
 
         if cache_position is None:
             past_seen_tokens = (
                 past_key_values.get_seq_length() if past_key_values is not None else 0
             )
-            current_sequence_length = inputs_embeds.shape[1]
-
-            # Truncate inputs_embeds if it exceeds max_position_embeddings
-            max_allowed_length = self.config.max_position_embeddings - past_seen_tokens
-            if current_sequence_length > max_allowed_length:
-                inputs_embeds = inputs_embeds[:, :max_allowed_length, :]
-                current_sequence_length = max_allowed_length
-
             cache_position = torch.arange(
                 past_seen_tokens,
-                past_seen_tokens + current_sequence_length,
+                past_seen_tokens + inputs_embeds.shape[1],
                 device=inputs_embeds.device,
             )
 
