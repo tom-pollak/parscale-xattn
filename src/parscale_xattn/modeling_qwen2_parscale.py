@@ -416,19 +416,27 @@ class Qwen2Attention(nn.Module):
             attn_output_reshaped = attn_output.reshape(*input_shape, -1).contiguous()
 
             # Project the expanded features back to hidden size
-            # The o_proj expects hidden_size input, but we have parscale_n * hidden_size
-            # We need to handle this dimension mismatch
+            # With cross-attention, we have parscale_n * num_heads * head_dim features
+            # We need to compress this back to hidden_size
             batch_seq_size = attn_output_reshaped.size(0) * attn_output_reshaped.size(1)
             expanded_features = attn_output_reshaped.view(batch_seq_size, -1)
 
-            # Simple linear projection to compress parscale_n * hidden_size -> hidden_size
+            # Create projection layer to compress parscale_n * num_heads * head_dim -> hidden_size
+            expected_input_size = self.config.parscale_n * self.config.num_attention_heads * self.head_dim
             if not hasattr(self, "cross_attn_proj"):
                 self.cross_attn_proj = nn.Linear(
-                    self.config.parscale_n * self.config.hidden_size,
+                    expected_input_size,
                     self.config.hidden_size,
                     bias=False,
                     device=expanded_features.device,
                     dtype=expanded_features.dtype,
+                )
+
+            # Validate input dimensions before projection
+            if expanded_features.size(-1) != expected_input_size:
+                raise RuntimeError(
+                    f"Cross-attention projection input size mismatch: "
+                    f"expected {expected_input_size}, got {expanded_features.size(-1)}"
                 )
 
             projected_output = self.cross_attn_proj(expanded_features)
