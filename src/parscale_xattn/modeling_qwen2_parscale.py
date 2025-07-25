@@ -8,6 +8,7 @@ from typing import Callable, List, Optional, Tuple, Union
 
 import torch
 from torch import nn
+from torch.distributed.tensor import DTensor, Replicate
 from einops import repeat, rearrange
 
 from transformers.activations import ACT2FN
@@ -169,6 +170,13 @@ class ParscaleCache(DynamicCache):
             batch_size = key_states.size(0) // self.parscale_n
             self.key_cache[layer_idx] = self.key_cache[layer_idx].repeat(batch_size, 1, 1, 1)
             self.value_cache[layer_idx] = self.value_cache[layer_idx].repeat(batch_size, 1, 1, 1)
+
+        if isinstance(key_states, DTensor) and not isinstance(self.key_cache[layer_idx], DTensor):
+            device_mesh = key_states.device_mesh
+            placements = [Replicate()] * device_mesh.ndim
+            self.key_cache[layer_idx] = DTensor.from_local(self.key_cache[layer_idx].to(key_states.device), device_mesh, placements, run_check=False)
+            self.value_cache[layer_idx] = DTensor.from_local(self.value_cache[layer_idx].to(value_states.device), device_mesh, placements, run_check=False)
+
         return super().update(key_states, value_states, layer_idx, cache_kwargs)
 
     def get_seq_length(self, layer_idx=0):
