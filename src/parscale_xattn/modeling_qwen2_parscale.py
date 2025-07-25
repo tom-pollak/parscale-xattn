@@ -187,7 +187,14 @@ class ParscaleCache(DynamicCache):
             self.key_cache[layer_idx] = _replicate_if_dtensor(self.key_cache[layer_idx], key_states)
             self.value_cache[layer_idx] = _replicate_if_dtensor(self.value_cache[layer_idx], value_states)
 
-        return super().update(key_states, value_states, layer_idx, cache_kwargs)
+        # Explicitly inline the logic from the parent `DynamicCache.update` method instead of calling `super().update()`.
+        # This is a workaround for a `torch.compile` issue where the `super()` call was causing a `RuntimeError`
+        # due to mixed `torch.Tensor` and `DTensor` types when running with FSDP. Making the `torch.cat` operation
+        # explicit in this method helps the compiler correctly handle the tensor types.
+        self.key_cache[layer_idx] = torch.cat([self.key_cache[layer_idx], key_states], dim=-2)
+        self.value_cache[layer_idx] = torch.cat([self.value_cache[layer_idx], value_states], dim=-2)
+
+        return self.key_cache[layer_idx], self.value_cache[layer_idx]
 
     def get_seq_length(self, layer_idx=0):
         seq_len = super().get_seq_length(layer_idx)
