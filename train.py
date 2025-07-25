@@ -200,13 +200,12 @@ def main():
         # Define a tiny configuration
         tiny_config = Qwen2ParScaleConfig(
             vocab_size=tokenizer.vocab_size,
-            hidden_size=64,
-            intermediate_size=128,
+            hidden_size=256,
+            intermediate_size=512,
             num_hidden_layers=12,
             num_attention_heads=32,
             num_key_value_heads=16,
-            max_position_embeddings=config.training.max_length
-            + config.parscale.parscale_n_tokens,
+            max_position_embeddings=1024,
             parscale_n=config.parscale.parscale_n,
             parscale_n_tokens=config.parscale.parscale_n_tokens,
             enable_cross_attn=config.parscale.enable_cross_attn,
