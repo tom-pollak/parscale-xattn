@@ -102,6 +102,7 @@ class Qwen2ParScaleConfig(PretrainedConfig):
             Number of parallel replicas for ParScale. When set to 1, behaves as standard Qwen2.
         parscale_n_tokens (`int`, *optional*, defaults to 48):
             Number of prefix tokens for cross-replica communication via prefix tokens.
+            Set to 0 to disable learnt prefix tokens and use only cross-attention.
         parscale_attn_smooth (`float`, *optional*, defaults to 0.01):
             Attention smoothing parameter for output aggregation across replicas.
         enable_cross_attn (`bool`, *optional*, defaults to False):

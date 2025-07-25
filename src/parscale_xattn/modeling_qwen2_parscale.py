@@ -180,7 +180,7 @@ class ParscaleCache(DynamicCache):
     def get_seq_length(self, layer_idx=0):
         seq_len = super().get_seq_length(layer_idx)
         if seq_len != 0:
-            seq_len -= self.n_prefix_tokens
+            seq_len -= self.n_prefix_tokens  # When n_prefix_tokens=0, this is a noop
         return seq_len
 
     def reorder_cache(self, beam_idx: torch.LongTensor):
@@ -218,7 +218,7 @@ class Qwen2Attention(nn.Module):
         self.o_proj = nn.Linear(
             config.num_attention_heads * self.head_dim, config.hidden_size, bias=False
         )
-        if config.parscale_n > 1:
+        if config.parscale_n > 1 and config.parscale_n_tokens > 0:
             self.prefix_k = nn.Parameter(
                 torch.empty(
                     (
@@ -278,9 +278,8 @@ class Qwen2Attention(nn.Module):
             )
         )
 
-        if self.config.parscale_n > 1:
+        if self.config.parscale_n > 1 and self.config.parscale_n_tokens > 0:
             # Expand attention mask to contain the prefix tokens
-            n_virtual_tokens = self.config.parscale_n_tokens
 
             if attention_mask is not None:
                 attention_mask = torch.cat(
@@ -307,7 +306,7 @@ class Qwen2Attention(nn.Module):
                             [
                                 query_states.size(0),
                                 query_states.size(1),
-                                n_virtual_tokens,
+                                self.config.parscale_n_tokens,
                                 query_states.size(3),
                             ],
                             dtype=query_states.dtype,
@@ -406,9 +405,9 @@ class Qwen2Attention(nn.Module):
             **kwargs,
         )
 
-        if self.config.parscale_n > 1 and query_states.size(2) != 1:
+        if self.config.parscale_n_tokens > 0 and query_states.size(2) != 1:
             # Remove the prefix part
-            attn_output = attn_output[:, n_virtual_tokens:]
+            attn_output = attn_output[:, self.config.parscale_n_tokens:]
 
         # Handle cross-attention output projection
         if self.config.parscale_n > 1 and use_cross_attn:
@@ -836,10 +835,29 @@ class Qwen2Model(Qwen2PreTrainedModel):
             # The trained prefix is saved in layer.self_attn.prefix_k / layer.self_attn.prefix_v
             # We extract them to construct ParscaleCache.
             if past_key_values is None or past_key_values.get_seq_length() == 0:
-                past_key_values = ParscaleCache(
-                    [layer.self_attn.prefix_k for layer in self.layers],
-                    [layer.self_attn.prefix_v for layer in self.layers],
-                )
+                if self.config.parscale_n_tokens > 0:
+                    past_key_values = ParscaleCache(
+                        [layer.self_attn.prefix_k for layer in self.layers],
+                        [layer.self_attn.prefix_v for layer in self.layers],
+                    )
+                else:
+                    # Create empty prefix tensors when parscale_n_tokens=0
+                    empty_prefix_k = []
+                    empty_prefix_v = []
+                    for layer in self.layers:
+                        empty_k = torch.zeros(
+                            (self.config.parscale_n, self.config.num_key_value_heads, 0, layer.self_attn.head_dim),
+                            device=next(layer.parameters()).device,
+                            dtype=next(layer.parameters()).dtype
+                        )
+                        empty_v = torch.zeros(
+                            (self.config.parscale_n, self.config.num_key_value_heads, 0, layer.self_attn.head_dim),
+                            device=next(layer.parameters()).device,
+                            dtype=next(layer.parameters()).dtype
+                        )
+                        empty_prefix_k.append(empty_k)
+                        empty_prefix_v.append(empty_v)
+                    past_key_values = ParscaleCache(empty_prefix_k, empty_prefix_v)
 
         if use_cache and past_key_values is None:
             past_key_values = DynamicCache()
