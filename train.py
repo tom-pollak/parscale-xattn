@@ -5,7 +5,7 @@ from typing import Optional
 import torch
 import wandb
 from accelerate import Accelerator
-from accelerate.utils import broadcast_object
+from accelerate.utils import broadcast_object_list
 from datasets import load_dataset
 from omegaconf import OmegaConf, SCMode
 from pydantic import TypeAdapter
@@ -161,7 +161,7 @@ def init_wandb(accelerator: Accelerator) -> dict:
     else:
         wandb_config = {}
 
-    wandb_config = broadcast_object(wandb_config, from_process=0)
+    wandb_config = broadcast_object_list([wandb_config], from_process=0).pop()
     return wandb_config
 
 
