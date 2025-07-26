@@ -238,6 +238,11 @@ class Qwen2ParScaleConfig(PretrainedConfig):
                     f"Cross-attention should be disabled when parscale_n=1, "
                     f"but enable_cross_attn={self.enable_cross_attn}"
                 )
+            if self.parscale_n_tokens > 0:
+                raise ValueError(
+                    f"Prefix tokens should be 0 when parscale_n=1 (standard Qwen2 mode), "
+                    f"but parscale_n_tokens={self.parscale_n_tokens}"
+                )
 
         # Cross-attention layers validation
         if self.parscale_cross_attn_layers is not None:
