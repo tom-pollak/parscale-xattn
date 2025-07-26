@@ -228,7 +228,7 @@ def main():
         return batch
 
     fsdp_config = {
-        "fsdp_activation_checkpointing": False,
+        "fsdp_activation_checkpointing": True,
         "fsdp_auto_wrap_policy": "TRANSFORMER_BASED_WRAP",
         "fsdp_cpu_ram_efficient_loading": True,
         "fsdp_offload_params": False,
