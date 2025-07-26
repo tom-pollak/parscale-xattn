@@ -344,6 +344,7 @@ class Qwen2Attention(nn.Module):
         )
 
         if self.config.parscale_n_tokens > 0 and query_states.size(2) != 1:
+            assert self.config.parscale_n > 1, "to have tokens you need more than 1 n"
             # Remove the prefix part
             attn_output = attn_output[:, self.config.parscale_n_tokens :]
 
