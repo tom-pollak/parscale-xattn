@@ -261,6 +261,12 @@ class Qwen2Attention(nn.Module):
             key_states, value_states = past_key_value.update(
                 key_states, value_states, self.layer_idx, cache_kwargs
             )
+        elif self.training and self.config.parscale_n_tokens > 0:
+            b = key_states.size(0) // self.config.parscale_n
+            prefix_k = repeat(self.prefix_k, "p ... -> (p b) ...", b=b)
+            prefix_v = repeat(self.prefix_v, "p ... -> (p b) ...", b=b)
+            key_states = torch.cat([prefix_k, key_states], dim=2)
+            value_states = torch.cat([prefix_v, value_states], dim=2)
 
         if self.config.parscale_n > 1 and self.config.parscale_n_tokens > 0:
             # Expand attention mask to contain the prefix tokens
@@ -872,7 +878,7 @@ class Qwen2Model(Qwen2PreTrainedModel):
                 )
 
             # If we have a learnt prefix, we use ParscaleCache
-            if self.config.parscale_n_tokens > 0:
+            if self.config.parscale_n_tokens > 0 and use_cache:
                 # The trained prefix is saved in layer.self_attn.prefix_k / layer.self_attn.prefix_v
                 # We extract them to construct ParscaleCache.
                 if past_key_values is None or past_key_values.get_seq_length() == 0:
