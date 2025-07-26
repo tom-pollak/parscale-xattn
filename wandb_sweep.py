@@ -24,7 +24,7 @@ SWEEP_CONFIGS = {
         "description": "Verify 3e-4 learning rate with P=1 and P=4",
         "method": "grid",
         "parameters": {
-            "save_total_limit": {"value": 0},
+            "training.save_total_limit": {"value": 0},
             "parscale.parscale_n": {"value": 1},
             "parscale.parscale_n_tokens": {"value": 0},
             "parscale.enable_cross_attn": {"value": False},
@@ -38,7 +38,7 @@ SWEEP_CONFIGS = {
         "description": "Verify 3e-4 learning rate with P=1 and P=4",
         "method": "grid",
         "parameters": {
-            "save_total_limit": {"value": 0},
+            "training.save_total_limit": {"value": 0},
             "parscale.parscale_n": {"values": [4, 8]},
             "parscale.enable_cross_attn": {"value": False},
             "training.learning_rate": {"values": [1e-4, 3e-4, 5e-4, 1e-3]},
@@ -51,8 +51,8 @@ SWEEP_CONFIGS = {
         "description": "Original paper replication: P=1,2,4,8 with fixed LR",
         "method": "grid",
         "parameters": {
-            "save_total_limit": {"value": 0},
-            "parscale.parscale_n": {"values": [1, 2, 4, 8]},
+            "training.save_total_limit": {"value": 0},
+            "parscale.parscale_n": {"values": [2, 4, 8]},
             "parscale.enable_cross_attn": {"value": False},
         },
     },
@@ -62,8 +62,8 @@ SWEEP_CONFIGS = {
         "description": "Cross-attention on all layers with P=1,2,4,8",
         "method": "grid",
         "parameters": {
-            "save_total_limit": {"value": 0},
-            "parscale.parscale_n": {"values": [1, 2, 4, 8]},
+            "training.save_total_limit": {"value": 0},
+            "parscale.parscale_n": {"values": [2, 4, 8]},
             "parscale.enable_cross_attn": {"value": True},
         },
     },
@@ -73,8 +73,8 @@ SWEEP_CONFIGS = {
         "description": "Cross-attention on preset layers with P=1,2,4,8",
         "method": "grid",
         "parameters": {
-            "save_total_limit": {"value": 0},
-            "parscale.parscale_n": {"values": [1, 2, 4, 8]},
+            "training.save_total_limit": {"value": 0},
+            "parscale.parscale_n": {"values": [2, 4, 8]},
             "parscale.enable_cross_attn": {"value": True},
             "parscale.parscale_cross_attn_layers": {
                 "value": [0, 6, 12, 18]
