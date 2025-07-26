@@ -189,9 +189,6 @@ def mk_config(wandb_config) -> Config:
 
 def main():
     accelerator = Accelerator()
-    if accelerator.is_main_process:
-        wandb.init(project=os.environ.get("WANDB_PROJECT", "parscale-xattn"))
-
     wandb_config = init_wandb(accelerator)
     config = mk_config(wandb_config)
 

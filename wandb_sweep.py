@@ -7,7 +7,7 @@ import sys
 
 import wandb
 
-PROJECT_NAME = "parscale-cross-attention"
+PROJECT_NAME = "parscale-xattn"
 
 BASE_CONFIG = {
     "command": ["accelerate", "launch", "train.py"],
