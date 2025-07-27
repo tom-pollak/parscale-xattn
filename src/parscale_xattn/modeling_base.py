@@ -117,23 +117,47 @@ def eager_attention_forward(
 
 
 class ParscaleCache(DynamicCache):
-    def __init__(self, prefix_keys: List[torch.Tensor], prefix_values: List[torch.Tensor]):
+    def __init__(self, prefix_k, prefix_v) -> None:
         super().__init__()
-        self.key_cache: List[torch.Tensor] = prefix_keys
-        self.value_cache: List[torch.Tensor] = prefix_values
-        self.parscale_n = prefix_keys[0].size(0) if len(prefix_keys) > 0 else 1
-        self.n_prefix_tokens = prefix_keys[0].shape[-2] if len(prefix_keys) > 0 else 0
-        self._seen_tokens = self.n_prefix_tokens
+        self._seen_tokens = (
+            0  # Used in `generate` to keep tally of how many tokens the cache has seen
+        )
+        self.key_cache: List[torch.Tensor] = prefix_k
+        self.value_cache: List[torch.Tensor] = prefix_v
+        self.parscale_n = prefix_k[0].size(0)
+        self.n_prefix_tokens = prefix_k[0].size(2)
 
-    def get_seq_length(self, layer_idx: int = 0) -> int:
-        if len(self.key_cache) <= layer_idx:
-            return 0
-        return self.key_cache[layer_idx].shape[-2]
+    def update(
+        self,
+        key_states: torch.Tensor,
+        value_states: torch.Tensor,
+        layer_idx: int,
+        cache_kwargs: Optional[dict] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        if self.key_cache[layer_idx].size(0) != key_states.size(0):
+            # first time generation
+            self.key_cache[layer_idx] = repeat(
+                self.key_cache[layer_idx],
+                "n_parscale ... -> (n_parscale b) ...",
+                b=key_states.size(0) // self.parscale_n,
+            )
+            self.value_cache[layer_idx] = repeat(
+                self.value_cache[layer_idx],
+                "n_parscale ... -> (n_parscale b) ...",
+                b=key_states.size(0) // self.parscale_n,
+            )
+        return super().update(key_states, value_states, layer_idx, cache_kwargs)
+
+    def get_seq_length(self, layer_idx=0):
+        seq_len = super().get_seq_length(layer_idx)
+        if seq_len != 0:
+            seq_len -= self.n_prefix_tokens
+        return seq_len
 
     def reorder_cache(self, beam_idx: torch.LongTensor):
         """Reorders the cache for beam search, given the selected beam indices."""
-        batch_size = self.key_cache[0].size(0) // self.parscale_n
-        beam_idx = torch.cat([beam_idx + batch_size * i for i in range(self.parscale_n)])
+        b = self.key_cache[0].size(0) // self.parscale_n
+        beam_idx = torch.cat([beam_idx + b * i for i in range(self.parscale_n)])
         super().reorder_cache(beam_idx)
 
 
@@ -711,25 +735,11 @@ class ParScaleBaseModel(ParScaleBasePreTrainedModel):
 
             # The trained prefix is saved in layer.self_attn.prefix_k / layer.self_attn.prefix_v
             # We extract them to construct ParscaleCache.
-            if past_key_values is None:
-                batch_size = inputs_embeds.shape[0] // self.parscale_n
-                prefix_keys = [
-                    repeat(
-                        layer.self_attn.prefix_k,
-                        "n ... -> (b n) ...",
-                        b=batch_size,
-                    )
-                    for layer in self.layers
-                ]
-                prefix_values = [
-                    repeat(
-                        layer.self_attn.prefix_v,
-                        "n ... -> (b n) ...",
-                        b=batch_size,
-                    )
-                    for layer in self.layers
-                ]
-                past_key_values = ParscaleCache(prefix_keys, prefix_values)
+            if past_key_values is None or past_key_values.get_seq_length() == 0:
+                past_key_values = ParscaleCache(
+                    [layer.self_attn.prefix_k for layer in self.layers],
+                    [layer.self_attn.prefix_v for layer in self.layers],
+                )
 
         if use_cache and past_key_values is None:
             past_key_values = DynamicCache()

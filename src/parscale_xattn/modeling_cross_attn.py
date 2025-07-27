@@ -206,32 +206,6 @@ class ParScaleCrossAttnModel(ParScaleBaseModel):
                     position_ids, "b s -> (n_parscale b) s", n_parscale=self.parscale_n
                 )
 
-            # If we have a learnt prefix, we use ParscaleCache
-            if self.use_prefix_cache and use_cache:
-                # The trained prefix is saved in layer.self_attn.prefix_k / layer.self_attn.prefix_v
-                # We extract them to construct ParscaleCache.
-                if past_key_values is None:
-                    from .modeling_base import ParscaleCache
-
-                    batch_size = inputs_embeds.shape[0] // self.config.parscale_n
-                    prefix_keys = [
-                        repeat(
-                            layer.self_attn.prefix_k,
-                            "n ... -> (b n) ...",
-                            b=batch_size,
-                        )
-                        for layer in self.layers
-                    ]
-                    prefix_values = [
-                        repeat(
-                            layer.self_attn.prefix_v,
-                            "n ... -> (b n) ...",
-                            b=batch_size,
-                        )
-                        for layer in self.layers
-                    ]
-                    past_key_values = ParscaleCache(prefix_keys, prefix_values)
-
         # Standard Hugging Face cache initialization
         if use_cache and past_key_values is None:
             from transformers.cache_utils import DynamicCache
