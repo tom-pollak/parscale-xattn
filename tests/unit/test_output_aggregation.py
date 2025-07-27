@@ -319,11 +319,11 @@ class TestAggregationMathematicalProperties:
         """Test that aggregation is deterministic for same inputs."""
         # Set seeds for reproducibility
         torch.manual_seed(42)
-        model1 = ParScaleCrossAttnModel(small_config)
+        model1 = ParScaleCrossAttnModel(small_config.copy())
         model1.eval()
 
         torch.manual_seed(42)
-        model2 = ParScaleCrossAttnModel(small_config)
+        model2 = ParScaleCrossAttnModel(small_config.copy())
         model2.eval()
 
         # Same input
