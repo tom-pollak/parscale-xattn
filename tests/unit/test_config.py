@@ -107,11 +107,12 @@ class TestParScaleCrossAttnConfig:
             ValueError,
             match="parscale_cross_attn_layers is specified but enable_cross_attn=False",
         ):
-            ParScaleCrossAttnConfig(parscale_cross_attn_layers=[0, 1])
+            ParScaleCrossAttnConfig(parscale_n=2, parscale_cross_attn_layers=[0, 1])
 
         # Invalid layer indices
         with pytest.raises(ValueError, match="Layer index.*is >= num_hidden_layers"):
             ParScaleCrossAttnConfig(
+                parscale_n=2,
                 num_hidden_layers=4,
                 enable_cross_attn=True,
                 parscale_cross_attn_layers=[0, 1, 2, 5],  # 5 is invalid
@@ -121,7 +122,7 @@ class TestParScaleCrossAttnConfig:
         """Test replica RoPE validation."""
         # Replica RoPE requires cross-attention
         with pytest.raises(ValueError, match="Replica RoPE.*requires cross-attention"):
-            ParScaleCrossAttnConfig(enable_replica_rope=True)
+            ParScaleCrossAttnConfig(parscale_n=2, enable_replica_rope=True)
 
         # Replica RoPE requires parscale_n > 1
         with pytest.raises(ValueError, match="Replica RoPE.*requires parscale_n > 1"):
