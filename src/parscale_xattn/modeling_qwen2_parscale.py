@@ -212,7 +212,7 @@ class Qwen2Attention(nn.Module):
 
         # Initialize prefix tokens if enabled
         # Note: config validation ensures parscale_n_tokens > 0 implies parscale_n > 1
-        if config.parscale_n_tokens > 0:
+        if self.use_prefix_cache:
             self.prefix_k = nn.Parameter(
                 torch.empty(
                     (
@@ -233,6 +233,11 @@ class Qwen2Attention(nn.Module):
                     )
                 )
             )
+
+    @property
+    def use_prefix_cache(self) -> bool:
+        """Whether to use prefix cache based on parscale configuration."""
+        return self.config.parscale_n > 1 and self.config.parscale_n_tokens > 0
 
     def forward(
         self,
@@ -261,15 +266,17 @@ class Qwen2Attention(nn.Module):
             key_states, value_states = past_key_value.update(
                 key_states, value_states, self.layer_idx, cache_kwargs
             )
-        elif self.training and self.config.parscale_n_tokens > 0:
+        elif self.training and self.use_prefix_cache:
             b = key_states.size(0) // self.config.parscale_n
             prefix_k = repeat(self.prefix_k, "p ... -> (p b) ...", b=b)
             prefix_v = repeat(self.prefix_v, "p ... -> (p b) ...", b=b)
             key_states = torch.cat([prefix_k, key_states], dim=2)
             value_states = torch.cat([prefix_v, value_states], dim=2)
 
-        if self.config.parscale_n > 1 and self.config.parscale_n_tokens > 0:
+        if self.use_prefix_cache:
             # Expand attention mask to contain the prefix tokens
+            n_virtual_tokens = self.config.parscale_n_tokens
+            
             if attention_mask is not None:
                 prefix_mask = torch.zeros(
                     (
@@ -343,10 +350,10 @@ class Qwen2Attention(nn.Module):
             **kwargs,
         )
 
-        if self.config.parscale_n_tokens > 0 and query_states.size(2) != 1:
-            assert self.config.parscale_n > 1, "to have tokens you need more than 1 n"
+        if self.use_prefix_cache and query_states.size(2) != 1:
             # Remove the prefix part
-            attn_output = attn_output[:, self.config.parscale_n_tokens :]
+            n_virtual_tokens = self.config.parscale_n_tokens
+            attn_output = attn_output[:, n_virtual_tokens:]
 
         # Standard attention: use regular output projection
         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
@@ -431,9 +438,10 @@ class CrossReplicaAttention(nn.Module):
         # Apply RoPE if provided
         if replica_position_embeddings is not None:
             cos, sin = replica_position_embeddings
-            # cos/sin are (b, p, d_h). We need to reshape for (b*s, p, d_h)
-            cos = cos.unsqueeze(1).expand(-1, s, -1, -1).reshape(b * s, p, -1)
-            sin = sin.unsqueeze(1).expand(-1, s, -1, -1).reshape(b * s, p, -1)
+            # cos/sin are (b, p, head_dim). We need to reshape for (b*s, p, head_dim)
+            # Expand across sequence length: (b, p, head_dim) -> (b, s, p, head_dim) -> (b*s, p, head_dim)
+            cos = cos.unsqueeze(1).expand(b, s, p, -1).reshape(b * s, p, -1)
+            sin = sin.unsqueeze(1).expand(b, s, p, -1).reshape(b * s, p, -1)
             q, k = apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1)
 
         # Repeat K,V for GQA
@@ -812,6 +820,11 @@ class Qwen2Model(Qwen2PreTrainedModel):
         # Initialize weights and apply final processing
         self.post_init()
 
+    @property
+    def use_prefix_cache(self) -> bool:
+        """Whether to use prefix cache based on parscale configuration."""
+        return self.layers[0].use_prefix_cache
+
     def get_input_embeddings(self):
         return self.embed_tokens
 
@@ -879,7 +892,7 @@ class Qwen2Model(Qwen2PreTrainedModel):
                 )
 
             # If we have a learnt prefix, we use ParscaleCache
-            if self.config.parscale_n_tokens > 0 and use_cache:
+            if self.use_prefix_cache and use_cache:
                 # The trained prefix is saved in layer.self_attn.prefix_k / layer.self_attn.prefix_v
                 # We extract them to construct ParscaleCache.
                 if past_key_values is None or past_key_values.get_seq_length() == 0:
@@ -934,11 +947,12 @@ class Qwen2Model(Qwen2PreTrainedModel):
             )
 
             # Generate RoPE embeddings for replica positions
-            # Use a dummy tensor with the correct device and dtype for the embedding calculation
+            # Create a minimal tensor just for head_dim calculation
+            head_dim = self.config.hidden_size // self.config.num_attention_heads
             dummy_tensor = torch.empty(
                 batch_size,
                 self.config.parscale_n,
-                self.config.hidden_size,
+                head_dim,
                 device=hidden_states.device,
                 dtype=hidden_states.dtype,
             )
