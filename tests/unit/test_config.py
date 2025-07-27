@@ -32,7 +32,7 @@ class TestParScaleBaseConfig:
 
         # Test ParScale defaults
         assert config.parscale_n == 1
-        assert config.parscale_n_tokens == 48
+        assert config.parscale_n_tokens == 0
         assert config.parscale_attn_smooth == 0.01
         assert config.model_type == "parscale_base"
 
@@ -80,7 +80,7 @@ class TestParScaleCrossAttnConfig:
 
         # Should inherit base ParScale defaults
         assert config.parscale_n == 1
-        assert config.parscale_n_tokens == 48
+        assert config.parscale_n_tokens == 0
 
     def test_cross_attn_enabled(self):
         """Test cross-attention enabled configuration."""
