@@ -83,7 +83,7 @@ class ParScaleBaseConfig(PretrainedConfig):
         intermediate_size=22016,
         num_hidden_layers=32,
         num_attention_heads=32,
-        num_key_value_heads=32,
+        num_key_value_heads=None,
         hidden_act="silu",
         max_position_embeddings=32768,
         initializer_range=0.02,
@@ -115,6 +115,10 @@ class ParScaleBaseConfig(PretrainedConfig):
         self.parscale_n = parscale_n
         self.parscale_n_tokens = parscale_n_tokens
         self.parscale_attn_smooth = parscale_attn_smooth
+
+        # for backward compatibility
+        if num_key_value_heads is None:
+            num_key_value_heads = num_attention_heads
 
         # for backward compatibility
         if num_key_value_heads is None:

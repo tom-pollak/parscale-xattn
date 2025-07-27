@@ -238,9 +238,6 @@ class Qwen2Attention(nn.Module):
             key_states, value_states = past_key_value.update(
                 key_states, value_states, self.layer_idx, cache_kwargs
             )
-        
-        key_states = repeat_kv(key_states, self.num_key_value_groups)
-        value_states = repeat_kv(value_states, self.num_key_value_groups)
 
         if self.config.parscale_n > 1:
             # Expand attention mask to contain the prefix tokens
