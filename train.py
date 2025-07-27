@@ -12,15 +12,17 @@ from pydantic import TypeAdapter
 from pydantic.dataclasses import dataclass
 from transformers import (
     AutoConfig,
+    AutoModelForCausalLM,
     AutoTokenizer,
     Trainer,
     TrainingArguments,
 )
 
-from src.parscale_xattn import (
+from parscale_xattn import (
     Qwen2ParScaleConfig,
     Qwen2ParScaleForCausalLM,
-    convert_qwen2_to_parscale,
+    Qwen2ParScaleConfig,
+    Qwen2ParScaleForCausalLM,
 )
 
 
@@ -79,6 +81,20 @@ def mk_model_config(
         **asdict(parscale_config),
         **asdict(model_config),
     )
+
+
+def convert_qwen2_to_parscale(
+    base_model_name: str,
+    config: Qwen2ParScaleConfig,
+) -> Qwen2ParScaleForCausalLM:
+    """Convert Qwen2 model to ParScale."""
+    base_model = AutoModelForCausalLM.from_pretrained(
+        base_model_name,
+        torch_dtype=torch.bfloat16,
+    )
+    parscale_model = Qwen2ParScaleForCausalLM(config).to(torch.bfloat16)
+    parscale_model.load_state_dict(base_model.state_dict(), strict=False)
+    return parscale_model
 
 
 def proc_dataset(dataset_name):

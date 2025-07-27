@@ -246,7 +246,7 @@ class Qwen2Attention(nn.Module):
             if attention_mask is not None:
                 attention_mask = torch.cat(
                     [
-                        torch.zeros(
+                        torch.ones(
                             (
                                 attention_mask.shape[0],
                                 attention_mask.shape[1],
@@ -281,7 +281,7 @@ class Qwen2Attention(nn.Module):
                 if attention_mask is not None:
                     attention_mask = torch.cat(
                         [
-                            torch.zeros(
+                            torch.ones(
                                 (
                                     attention_mask.shape[0],
                                     attention_mask.shape[1],
@@ -544,6 +544,16 @@ class ParScaleBasePreTrainedModel(PreTrainedModel):
             module.weight.data.normal_(mean=0.0, std=std)
             if module.padding_idx is not None:
                 module.weight.data[module.padding_idx].zero_()
+        elif isinstance(module, Qwen2Attention):
+            if hasattr(module, "prefix_k"):
+                module.prefix_k.data.normal_(mean=0.0, std=std)
+            if hasattr(module, "prefix_v"):
+                module.prefix_v.data.normal_(mean=0.0, std=std)
+        elif isinstance(module, Qwen2Attention):
+            if hasattr(module, "prefix_k"):
+                module.prefix_k.data.normal_(mean=0.0, std=std)
+            if hasattr(module, "prefix_v"):
+                module.prefix_v.data.normal_(mean=0.0, std=std)
 
 
 PARSCALE_INPUTS_DOCSTRING = r"""

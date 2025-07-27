@@ -379,6 +379,29 @@ class ParScaleCrossAttnForCausalLM(ParScaleBaseForCausalLM):
         # Re-initialize weights since we replaced the model
         self.post_init()
 
+    def _init_weights(self, module):
+        """
+        Initialize the weights of the model.
+        Cross-attention layers are initialized here, while other layers
+        are initialized by the parent class.
+        """
+        std = self.config.initializer_range
+        if isinstance(module, CrossReplicaAttention):
+            module.q_proj.weight.data.normal_(mean=0.0, std=std)
+            if module.q_proj.bias is not None:
+                module.q_proj.bias.data.zero_()
+            module.k_proj.weight.data.normal_(mean=0.0, std=std)
+            if module.k_proj.bias is not None:
+                module.k_proj.bias.data.zero_()
+            module.v_proj.weight.data.normal_(mean=0.0, std=std)
+            if module.v_proj.bias is not None:
+                module.v_proj.bias.data.zero_()
+            module.o_proj.weight.data.normal_(mean=0.0, std=std)
+            if module.o_proj.bias is not None:
+                module.o_proj.bias.data.zero_()
+        else:
+            super()._init_weights(module)
+
     @add_start_docstrings_to_model_forward(PARSCALE_INPUTS_DOCSTRING)
     @replace_return_docstrings(
         output_type=CausalLMOutputWithPast, config_class=_CONFIG_FOR_DOC
