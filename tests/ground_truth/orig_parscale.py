@@ -33,7 +33,7 @@ from transformers.utils import (
     logging,
     replace_return_docstrings,
 )
-from .configuration_qwen2_parscale import Qwen2ParScaleConfig
+from parscale_xattn.configuration_qwen2_parscale import Qwen2ParScaleConfig
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 
