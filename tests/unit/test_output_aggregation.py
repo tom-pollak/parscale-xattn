@@ -19,6 +19,12 @@ sys.path.append(str(Path(__file__).parent.parent / "ground_truth"))
 from config import create_ground_truth_config, create_ground_truth_base_model
 
 
+@pytest.fixture(scope="class")
+def model(small_config):
+    """A small model for fast testing, scoped to the class."""
+    return ParScaleCrossAttnModel(small_config)
+
+
 class TestAggregationLayer:
     """Test the MLP aggregation layer structure."""
 
@@ -30,10 +36,9 @@ class TestAggregationLayer:
         # Should not have aggregation layer
         assert not hasattr(model, "aggregate_layer") or model.aggregate_layer is None
 
-    def test_aggregation_layer_creation_parscale_mode(self):
+    def test_aggregation_layer_creation_parscale_mode(self, small_config):
         """Test aggregation layer creation in ParScale mode."""
-        config = Qwen2ParScaleConfig(parscale_n=4, parscale_n_tokens=48)
-        model = ParScaleBaseModel(config)
+        model = ParScaleBaseModel(small_config)
 
         # Should have aggregation layer
         assert hasattr(model, "aggregate_layer")
@@ -46,8 +51,8 @@ class TestAggregationLayer:
         # Check first linear layer
         first_layer = model.aggregate_layer[0]
         assert isinstance(first_layer, nn.Linear)
-        assert first_layer.in_features == config.parscale_n * config.hidden_size
-        assert first_layer.out_features == config.hidden_size
+        assert first_layer.in_features == small_config.parscale_n * small_config.hidden_size
+        assert first_layer.out_features == small_config.hidden_size
 
         # Check activation
         activation = model.aggregate_layer[1]
@@ -56,8 +61,8 @@ class TestAggregationLayer:
         # Check second linear layer
         second_layer = model.aggregate_layer[2]
         assert isinstance(second_layer, nn.Linear)
-        assert second_layer.in_features == config.hidden_size
-        assert second_layer.out_features == config.parscale_n
+        assert second_layer.in_features == small_config.hidden_size
+        assert second_layer.out_features == small_config.parscale_n
 
     def test_aggregation_layer_different_configurations(self):
         """Test aggregation layer for different ParScale configurations."""
@@ -82,64 +87,53 @@ class TestAggregationLayer:
             assert second_layer.out_features == parscale_n
 
 
+@pytest.mark.usefixtures("model")
 class TestOutputAggregation:
     """Test the output aggregation mechanism."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.config = Qwen2ParScaleConfig(
-            parscale_n=4,
-            parscale_n_tokens=48,
-            hidden_size=128,
-            num_hidden_layers=2,
-            num_attention_heads=4,
-            num_key_value_heads=4,
-        )
-        self.model = ParScaleCrossAttnModel(self.config)
-        self.batch_size = 2
-        self.seq_len = 5
+    batch_size = 2
+    seq_len = 5
 
-    def test_input_replication(self):
+    def test_input_replication(self, model, small_config):
         """Test that inputs are correctly replicated across replicas."""
         input_ids = torch.randint(
-            0, self.config.vocab_size, (self.batch_size, self.seq_len)
+            0, small_config.vocab_size, (self.batch_size, self.seq_len)
         )
 
         # Get input embeddings
-        inputs_embeds = self.model.embed_tokens(input_ids)
-        original_shape = inputs_embeds.shape
+        inputs_embeds = model.embed_tokens(input_ids)
 
         # Should be replicated to (parscale_n * batch_size, seq_len, hidden_size)
         replicated_embeds = rearrange(
             inputs_embeds,
             "b s h -> (n_parscale b) s h",
-            n_parscale=self.config.parscale_n,
+            n_parscale=small_config.parscale_n,
         )
 
         expected_shape = (
-            self.config.parscale_n * self.batch_size,
+            small_config.parscale_n * self.batch_size,
             self.seq_len,
-            self.config.hidden_size,
+            small_config.hidden_size,
         )
         assert replicated_embeds.shape == expected_shape
 
-    def test_aggregation_attention_computation(self):
+    def test_aggregation_attention_computation(self, model, small_config):
         """Test the dynamic weighted sum computation."""
         # Create dummy hidden states from replicas
         hidden_states = torch.randn(
-            self.config.parscale_n * self.batch_size,
+            small_config.parscale_n * self.batch_size,
             self.seq_len,
-            self.config.hidden_size,
+            small_config.hidden_size,
         )
 
         # Compute aggregation attention as in research spec
         attn = torch.unsqueeze(
             torch.softmax(
-                self.model.aggregate_layer(
+                model.aggregate_layer(
                     rearrange(
                         hidden_states,
                         "(n_parscale b) s h -> b s (h n_parscale)",
-                        n_parscale=self.config.parscale_n,
+                        n_parscale=small_config.parscale_n,
                     )
                 ).float(),
                 dim=-1,
@@ -148,32 +142,32 @@ class TestOutputAggregation:
         )  # [b s n_parscale 1]
 
         # Check attention shape and properties
-        expected_attn_shape = (self.batch_size, self.seq_len, self.config.parscale_n, 1)
+        expected_attn_shape = (self.batch_size, self.seq_len, small_config.parscale_n, 1)
         assert attn.shape == expected_attn_shape
 
         # Attention weights should sum to 1 across replicas
         attn_sum = attn.squeeze(-1).sum(dim=-1)  # Sum across parscale_n dimension
         assert torch.allclose(attn_sum, torch.ones_like(attn_sum), atol=1e-6)
 
-    def test_attention_smoothing(self):
+    def test_attention_smoothing(self, model, small_config):
         """Test attention smoothing mechanism."""
         # Test with smoothing enabled
-        self.model.parscale_aggregate_attn_smoothing = 0.1
+        model.parscale_aggregate_attn_smoothing = 0.1
 
         hidden_states = torch.randn(
-            self.config.parscale_n * self.batch_size,
+            small_config.parscale_n * self.batch_size,
             self.seq_len,
-            self.config.hidden_size,
+            small_config.hidden_size,
         )
 
         # Compute base attention
         attn = torch.unsqueeze(
             torch.softmax(
-                self.model.aggregate_layer(
+                model.aggregate_layer(
                     rearrange(
                         hidden_states,
                         "(n_parscale b) s h -> b s (h n_parscale)",
-                        n_parscale=self.config.parscale_n,
+                        n_parscale=small_config.parscale_n,
                     )
                 ).float(),
                 dim=-1,
@@ -182,8 +176,8 @@ class TestOutputAggregation:
         )
 
         # Apply smoothing as in research spec
-        smoothing = self.model.parscale_aggregate_attn_smoothing
-        smoothed_attn = attn * (1 - smoothing) + (smoothing / self.config.parscale_n)
+        smoothing = model.parscale_aggregate_attn_smoothing
+        smoothed_attn = attn * (1 - smoothing) + (smoothing / small_config.parscale_n)
 
         # Smoothed attention should still sum to 1
         smoothed_sum = smoothed_attn.squeeze(-1).sum(dim=-1)
@@ -194,22 +188,25 @@ class TestOutputAggregation:
         smoothed_var = smoothed_attn.squeeze(-1).var(dim=-1)
         assert torch.all(smoothed_var <= attn_var)
 
-    def test_final_weighted_sum(self):
+        # Reset smoothing
+        model.parscale_aggregate_attn_smoothing = small_config.parscale_attn_smooth
+
+    def test_final_weighted_sum(self, model, small_config):
         """Test the final weighted sum aggregation."""
         hidden_states = torch.randn(
-            self.config.parscale_n * self.batch_size,
+            small_config.parscale_n * self.batch_size,
             self.seq_len,
-            self.config.hidden_size,
+            small_config.hidden_size,
         )
 
         # Compute attention weights
         attn = torch.unsqueeze(
             torch.softmax(
-                self.model.aggregate_layer(
+                model.aggregate_layer(
                     rearrange(
                         hidden_states,
                         "(n_parscale b) s h -> b s (h n_parscale)",
-                        n_parscale=self.config.parscale_n,
+                        n_parscale=small_config.parscale_n,
                     )
                 ).float(),
                 dim=-1,
@@ -222,7 +219,7 @@ class TestOutputAggregation:
             rearrange(
                 hidden_states,
                 "(n_parscale b) s h -> b s n_parscale h",
-                n_parscale=self.config.parscale_n,
+                n_parscale=small_config.parscale_n,
             )
             * attn,
             dim=2,
@@ -230,38 +227,31 @@ class TestOutputAggregation:
         ).to(hidden_states.dtype)
 
         # Check output shape
-        expected_shape = (self.batch_size, self.seq_len, self.config.hidden_size)
+        expected_shape = (self.batch_size, self.seq_len, small_config.hidden_size)
         assert aggregated.shape == expected_shape
 
-    def test_end_to_end_aggregation(self):
+    def test_end_to_end_aggregation(self, model, small_config):
         """Test end-to-end output aggregation in model forward pass."""
         input_ids = torch.randint(
-            0, self.config.vocab_size, (self.batch_size, self.seq_len)
+            0, small_config.vocab_size, (self.batch_size, self.seq_len)
         )
 
         # Forward pass
-        output = self.model(input_ids)
+        output = model(input_ids)
 
         # Output should have correct shape (batch_size, seq_len, hidden_size)
         # Not (parscale_n * batch_size, seq_len, hidden_size)
-        expected_shape = (self.batch_size, self.seq_len, self.config.hidden_size)
+        expected_shape = (self.batch_size, self.seq_len, small_config.hidden_size)
         assert output.last_hidden_state.shape == expected_shape
 
 
 class TestAggregationCompatibility:
     """Test aggregation compatibility with ground truth."""
 
-    def test_aggregation_layer_structure_compatibility(self):
+    def test_aggregation_layer_structure_compatibility(self, small_config_dict):
         """Test that aggregation layer structure matches ground truth."""
-        config_params = {
-            "parscale_n": 4,
-            "parscale_n_tokens": 48,
-            "hidden_size": 128,
-            "num_hidden_layers": 2,
-        }
-
-        new_config = Qwen2ParScaleConfig(**config_params)
-        orig_config = create_ground_truth_config(**config_params)
+        new_config = Qwen2ParScaleConfig(**small_config_dict)
+        orig_config = create_ground_truth_config(**small_config_dict)
 
         new_model = ParScaleCrossAttnModel(new_config)
         orig_model = create_ground_truth_base_model(orig_config)
@@ -284,12 +274,9 @@ class TestAggregationCompatibility:
         assert new_second.in_features == orig_second.in_features
         assert new_second.out_features == orig_second.out_features
 
-    def test_smoothing_parameter_compatibility(self):
+    def test_smoothing_parameter_compatibility(self, small_config_dict):
         """Test that smoothing parameters match ground truth."""
-        config_params = {
-            "parscale_n": 4,
-            "parscale_attn_smooth": 0.05,
-        }
+        config_params = {**small_config_dict, "parscale_attn_smooth": 0.05}
 
         new_config = Qwen2ParScaleConfig(**config_params)
         orig_config = create_ground_truth_config(**config_params)
@@ -306,34 +293,31 @@ class TestAggregationCompatibility:
 class TestAggregationMathematicalProperties:
     """Test mathematical properties of the aggregation system."""
 
-    def test_aggregation_preserves_batch_dimension(self):
+    def test_aggregation_preserves_batch_dimension(self, small_config):
         """Test that aggregation correctly handles batch dimension."""
-        config = Qwen2ParScaleConfig(parscale_n=4, hidden_size=64, num_hidden_layers=1)
-        model = ParScaleCrossAttnModel(config)
+        model = ParScaleCrossAttnModel(small_config)
 
         batch_sizes = [1, 2, 4, 8]
         seq_len = 3
 
         for batch_size in batch_sizes:
-            input_ids = torch.randint(0, config.vocab_size, (batch_size, seq_len))
+            input_ids = torch.randint(0, small_config.vocab_size, (batch_size, seq_len))
             output = model(input_ids)
 
             # Output batch size should match input
             assert output.last_hidden_state.shape[0] == batch_size
 
-    def test_aggregation_deterministic(self):
+    def test_aggregation_deterministic(self, small_config):
         """Test that aggregation is deterministic for same inputs."""
-        config = Qwen2ParScaleConfig(parscale_n=2, hidden_size=32, num_hidden_layers=1)
-
         # Set seeds for reproducibility
         torch.manual_seed(42)
-        model1 = ParScaleCrossAttnModel(config)
+        model1 = ParScaleCrossAttnModel(small_config)
 
         torch.manual_seed(42)
-        model2 = ParScaleCrossAttnModel(config)
+        model2 = ParScaleCrossAttnModel(small_config)
 
         # Same input
-        input_ids = torch.randint(0, config.vocab_size, (1, 3))
+        input_ids = torch.randint(0, small_config.vocab_size, (1, 3))
 
         with torch.no_grad():
             output1 = model1(input_ids)

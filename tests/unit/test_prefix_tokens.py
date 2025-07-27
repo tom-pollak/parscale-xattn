@@ -20,19 +20,17 @@ from config import create_ground_truth_config, create_ground_truth_model
 class TestPrefixTokenCreation:
     """Test creation of prefix tokens in attention layers."""
 
-    def test_no_prefix_tokens_standard_mode(self):
+    def test_no_prefix_tokens_standard_mode(self, small_config_no_replica):
         """Test that no prefix tokens are created in standard Qwen2 mode (parscale_n=1)."""
-        config = Qwen2ParScaleConfig(parscale_n=1, parscale_n_tokens=0)
-        attention = Qwen2Attention(config, layer_idx=0)
+        attention = Qwen2Attention(small_config_no_replica, layer_idx=0)
 
         # Should not have prefix parameters
         assert not hasattr(attention, "prefix_k")
         assert not hasattr(attention, "prefix_v")
 
-    def test_prefix_tokens_created_parscale_mode(self):
+    def test_prefix_tokens_created_parscale_mode(self, small_config):
         """Test that prefix tokens are created in ParScale mode (parscale_n > 1)."""
-        config = Qwen2ParScaleConfig(parscale_n=4, parscale_n_tokens=48)
-        attention = Qwen2Attention(config, layer_idx=0)
+        attention = Qwen2Attention(small_config, layer_idx=0)
 
         # Should have prefix parameters
         assert hasattr(attention, "prefix_k")
@@ -40,10 +38,10 @@ class TestPrefixTokenCreation:
 
         # Check shapes match research spec
         expected_shape = (
-            config.parscale_n,  # 4 replicas
-            config.num_key_value_heads,  # 32 heads
-            config.parscale_n_tokens,  # 48 tokens
-            attention.head_dim,  # head dimension
+            small_config.parscale_n,
+            small_config.num_key_value_heads,
+            small_config.parscale_n_tokens,
+            attention.head_dim,
         )
 
         assert attention.prefix_k.shape == expected_shape
@@ -73,162 +71,132 @@ class TestPrefixTokenCreation:
             assert attention.prefix_v.shape == expected_shape
 
 
+@pytest.fixture(scope="class")
+def parscale_cache(small_config):
+    """A ParscaleCache instance for testing."""
+    head_dim = small_config.hidden_size // small_config.num_attention_heads
+    prefix_k = [
+        torch.randn(
+            small_config.parscale_n,
+            small_config.num_key_value_heads,
+            small_config.parscale_n_tokens,
+            head_dim,
+        )
+        for _ in range(small_config.num_hidden_layers)
+    ]
+    prefix_v = [torch.randn_like(k) for k in prefix_k]
+    return ParscaleCache(prefix_k, prefix_v)
+
+
+@pytest.mark.usefixtures("parscale_cache")
 class TestParscaleCache:
     """Test ParscaleCache functionality."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.config = Qwen2ParScaleConfig(parscale_n=4, parscale_n_tokens=48)
-        self.batch_size = 2
-        self.seq_len = 10
-        self.head_dim = self.config.hidden_size // self.config.num_attention_heads
+    batch_size = 2
+    seq_len = 10
 
-        # Create dummy prefix k/v tensors
-        self.prefix_k = [
-            torch.randn(
-                self.config.parscale_n,
-                self.config.num_key_value_heads,
-                self.config.parscale_n_tokens,
-                self.head_dim,
-            )
-            for _ in range(self.config.num_hidden_layers)
-        ]
-
-        self.prefix_v = [
-            torch.randn(
-                self.config.parscale_n,
-                self.config.num_key_value_heads,
-                self.config.parscale_n_tokens,
-                self.head_dim,
-            )
-            for _ in range(self.config.num_hidden_layers)
-        ]
-
-    def test_parscale_cache_initialization(self):
+    def test_parscale_cache_initialization(self, parscale_cache, small_config):
         """Test ParscaleCache initialization."""
-        cache = ParscaleCache(self.prefix_k, self.prefix_v)
+        assert parscale_cache.parscale_n == small_config.parscale_n
+        assert parscale_cache.n_prefix_tokens == small_config.parscale_n_tokens
+        assert len(parscale_cache.key_cache) == small_config.num_hidden_layers
+        assert len(parscale_cache.value_cache) == small_config.num_hidden_layers
 
-        assert cache.parscale_n == self.config.parscale_n
-        assert cache.n_prefix_tokens == self.config.parscale_n_tokens
-        assert len(cache.key_cache) == self.config.num_hidden_layers
-        assert len(cache.value_cache) == self.config.num_hidden_layers
-
-    def test_cache_sequence_length(self):
+    def test_cache_sequence_length(self, parscale_cache, small_config):
         """Test sequence length calculation accounts for prefix tokens."""
-        cache = ParscaleCache(self.prefix_k, self.prefix_v)
+        assert parscale_cache.get_seq_length() == 0
 
-        # Empty cache should report 0 sequence length (prefix doesn't count)
-        assert cache.get_seq_length() == 0
-
-        # After adding actual tokens, should subtract prefix length
+        head_dim = small_config.hidden_size // small_config.num_attention_heads
         dummy_k = torch.randn(
-            self.config.parscale_n * self.batch_size,
-            self.config.num_key_value_heads,
+            small_config.parscale_n * self.batch_size,
+            small_config.num_key_value_heads,
             self.seq_len,
-            self.head_dim,
+            head_dim,
         )
         dummy_v = torch.randn_like(dummy_k)
 
-        cache.update(dummy_k, dummy_v, layer_idx=0)
-        expected_len = (
-            self.config.parscale_n_tokens + self.seq_len - self.config.parscale_n_tokens
-        )
-        assert cache.get_seq_length() == expected_len
+        parscale_cache.update(dummy_k, dummy_v, layer_idx=0)
+        expected_len = self.seq_len
+        assert parscale_cache.get_seq_length() == expected_len
 
-    def test_cache_reorder_for_beam_search(self):
+    def test_cache_reorder_for_beam_search(self, parscale_cache, small_config):
         """Test cache reordering for beam search accounts for replicas."""
-        cache = ParscaleCache(self.prefix_k, self.prefix_v)
-
-        # Add some dummy data
+        head_dim = small_config.hidden_size // small_config.num_attention_heads
         dummy_k = torch.randn(
-            self.config.parscale_n * self.batch_size,
-            self.config.num_key_value_heads,
+            small_config.parscale_n * self.batch_size,
+            small_config.num_key_value_heads,
             self.seq_len,
-            self.head_dim,
+            head_dim,
         )
         dummy_v = torch.randn_like(dummy_k)
-        cache.update(dummy_k, dummy_v, layer_idx=0)
+        parscale_cache.update(dummy_k, dummy_v, layer_idx=0)
 
-        # Test beam index reordering
         beam_idx = torch.tensor([1, 0])  # Swap batch elements
-        cache.reorder_cache(beam_idx)
+        parscale_cache.reorder_cache(beam_idx)
 
-        # Should have reordered correctly (detailed verification would need actual beam search)
-        assert cache.key_cache[0].shape[0] == self.config.parscale_n * self.batch_size
+        assert (
+            parscale_cache.key_cache[0].shape[0]
+            == small_config.parscale_n * self.batch_size
+        )
 
 
 class TestAttentionMaskExpansion:
     """Test attention mask expansion for prefix tokens."""
 
-    def test_attention_mask_expansion(self):
+    def test_attention_mask_expansion(self, small_config):
         """Test that attention masks are properly expanded for prefix tokens."""
-        config = Qwen2ParScaleConfig(parscale_n=4, parscale_n_tokens=48)
-        attention = Qwen2Attention(config, layer_idx=0)
-
+        attention = Qwen2Attention(small_config, layer_idx=0)
         batch_size = 2
         seq_len = 10
 
-        # Create dummy inputs
         hidden_states = torch.randn(
-            config.parscale_n * batch_size, seq_len, config.hidden_size
+            small_config.parscale_n * batch_size, seq_len, small_config.hidden_size
         )
-
-        # Create attention mask (standard causal mask format)
-        attention_mask = torch.ones(config.parscale_n * batch_size, 1, seq_len, seq_len)
-
-        # Create position embeddings
+        attention_mask = torch.ones(
+            small_config.parscale_n * batch_size, 1, seq_len, seq_len
+        )
         position_embeddings = (
             torch.randn(batch_size, seq_len, attention.head_dim),
             torch.randn(batch_size, seq_len, attention.head_dim),
         )
 
-        # Forward pass should handle mask expansion internally
         output, _ = attention(
             hidden_states=hidden_states,
             position_embeddings=position_embeddings,
             attention_mask=attention_mask,
         )
 
-        # Output should have correct shape
         assert output.shape == hidden_states.shape
 
 
 class TestModelPrefixTokenIntegration:
     """Test prefix token integration in full model."""
 
-    def test_model_creates_parscale_cache(self):
+    def test_model_creates_parscale_cache(self, small_config):
         """Test that model creates ParscaleCache from prefix tokens."""
-        config = Qwen2ParScaleConfig(parscale_n=4, parscale_n_tokens=48)
-        model = ParScaleCrossAttnModel(config)
+        model = ParScaleCrossAttnModel(small_config)
 
-        # Should have prefix parameters in attention layers
         for layer in model.layers:
             if hasattr(layer.self_attn, "prefix_k"):
-                assert layer.self_attn.prefix_k.shape[0] == config.parscale_n
-                assert layer.self_attn.prefix_k.shape[2] == config.parscale_n_tokens
+                assert layer.self_attn.prefix_k.shape[0] == small_config.parscale_n
+                assert (
+                    layer.self_attn.prefix_k.shape[2]
+                    == small_config.parscale_n_tokens
+                )
 
-    def test_forward_pass_with_prefix_tokens(self):
+    def test_forward_pass_with_prefix_tokens(self, small_config):
         """Test forward pass correctly uses prefix tokens."""
-        config = Qwen2ParScaleConfig(
-            parscale_n=4,
-            parscale_n_tokens=48,
-            num_hidden_layers=2,  # Small for testing
-            hidden_size=128,
-        )
-        model = ParScaleCrossAttnModel(config)
-
+        model = ParScaleCrossAttnModel(small_config)
         batch_size = 2
         seq_len = 5
+        input_ids = torch.randint(0, small_config.vocab_size, (batch_size, seq_len))
 
-        input_ids = torch.randint(0, config.vocab_size, (batch_size, seq_len))
-
-        # Forward pass should work
         output = model(input_ids, use_cache=True)
 
-        # Should return past_key_values (ParscaleCache)
         assert output.past_key_values is not None
         assert isinstance(output.past_key_values, ParscaleCache)
-        assert output.past_key_values.parscale_n == config.parscale_n
+        assert output.past_key_values.parscale_n == small_config.parscale_n
+
 
 
 class TestPrefixTokenCompatibility:

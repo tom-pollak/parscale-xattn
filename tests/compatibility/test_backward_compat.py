@@ -19,19 +19,9 @@ from parscale_xattn.modeling_qwen2_parscale import (
 from parscale_xattn.modeling_base import Qwen2Attention
 
 
+@pytest.mark.usefixtures("small_config")
 class TestAPICompatibility:
     """Test that the API remains compatible with existing code."""
-
-    @pytest.fixture(scope="class")
-    def small_config(self):
-        """A small, fast configuration for testing."""
-        return Qwen2ParScaleConfig(
-            hidden_size=16,
-            num_hidden_layers=2,
-            intermediate_size=32,
-            num_attention_heads=4,
-            vocab_size=100,
-        )
 
     def test_original_class_names_available(self, small_config):
         """Test that original class names are still available as aliases."""
@@ -120,10 +110,9 @@ class TestAPICompatibility:
 class TestStandardQwen2Compatibility:
     """Test compatibility when used as standard Qwen2 (parscale_n=1)."""
 
-    def test_standard_mode_no_parscale_overhead(self):
+    def test_standard_mode_no_parscale_overhead(self, small_config_no_replica):
         """Test that standard mode has no ParScale overhead."""
-        config = Qwen2ParScaleConfig(parscale_n=1, parscale_n_tokens=0, hidden_size=64)
-        model = Qwen2ParScaleForCausalLM(config)
+        model = Qwen2ParScaleForCausalLM(small_config_no_replica)
 
         # Should not have ParScale-specific parameters when parscale_n=1
         for name, param in model.named_parameters():
@@ -132,39 +121,31 @@ class TestStandardQwen2Compatibility:
             assert "aggregate_layer" not in name
             assert "cross_replica" not in name
 
-    def test_standard_mode_forward_pass(self):
+    def test_standard_mode_forward_pass(self, small_config_no_replica):
         """Test that standard mode forward pass works identically to Qwen2."""
-        config = Qwen2ParScaleConfig(
-            parscale_n=1,
-            parscale_n_tokens=0,
-            hidden_size=64,
-            num_hidden_layers=2,
-            vocab_size=100,
-        )
-        model = Qwen2ParScaleForCausalLM(config)
+        model = Qwen2ParScaleForCausalLM(small_config_no_replica)
 
         batch_size = 2
         seq_len = 5
-        input_ids = torch.randint(0, config.vocab_size, (batch_size, seq_len))
+        input_ids = torch.randint(
+            0, small_config_no_replica.vocab_size, (batch_size, seq_len)
+        )
 
         # Forward pass should work normally
         output = model(input_ids)
 
         # Output shapes should be standard
-        assert output.logits.shape == (batch_size, seq_len, config.vocab_size)
-
-    def test_generation_compatibility(self):
-        """Test that generation works in standard mode."""
-        config = Qwen2ParScaleConfig(
-            parscale_n=1,
-            parscale_n_tokens=0,
-            hidden_size=64,
-            num_hidden_layers=1,
-            vocab_size=100,
+        assert output.logits.shape == (
+            batch_size,
+            seq_len,
+            small_config_no_replica.vocab_size,
         )
-        model = Qwen2ParScaleForCausalLM(config)
 
-        input_ids = torch.randint(0, config.vocab_size, (1, 3))
+    def test_generation_compatibility(self, small_config_no_replica):
+        """Test that generation works in standard mode."""
+        model = Qwen2ParScaleForCausalLM(small_config_no_replica)
+
+        input_ids = torch.randint(0, small_config_no_replica.vocab_size, (1, 3))
 
         # Generation should work
         with torch.no_grad():
@@ -179,12 +160,9 @@ class TestStandardQwen2Compatibility:
 class TestParScaleModeCompatibility:
     """Test compatibility in ParScale mode (parscale_n > 1)."""
 
-    def test_parscale_mode_initialization(self):
+    def test_parscale_mode_initialization(self, small_config):
         """Test that ParScale mode initializes correctly."""
-        config = Qwen2ParScaleConfig(
-            parscale_n=4, parscale_n_tokens=48, hidden_size=64, num_hidden_layers=2
-        )
-        model = Qwen2ParScaleForCausalLM(config)
+        model = Qwen2ParScaleForCausalLM(small_config)
 
         # Should have ParScale-specific parameters
         parscale_params = [
@@ -194,54 +172,43 @@ class TestParScaleModeCompatibility:
         ]
         assert len(parscale_params) > 0
 
-    def test_parscale_forward_batch_handling(self):
+    def test_parscale_forward_batch_handling(self, small_config):
         """Test that ParScale mode handles batches correctly."""
-        config = Qwen2ParScaleConfig(
-            parscale_n=4,
-            parscale_n_tokens=24,
-            hidden_size=64,
-            num_hidden_layers=1,
-            vocab_size=100,
-        )
-        model = Qwen2ParScaleForCausalLM(config)
+        model = Qwen2ParScaleForCausalLM(small_config)
 
         # Test different batch sizes
         for batch_size in [1, 2, 4]:
             seq_len = 3
-            input_ids = torch.randint(0, config.vocab_size, (batch_size, seq_len))
+            input_ids = torch.randint(
+                0, small_config.vocab_size, (batch_size, seq_len)
+            )
 
             output = model(input_ids)
 
             # Output batch size should match input
             assert output.logits.shape[0] == batch_size
             assert output.logits.shape[1] == seq_len
-            assert output.logits.shape[2] == config.vocab_size
+            assert output.logits.shape[2] == small_config.vocab_size
 
-    def test_cache_compatibility(self):
+    def test_cache_compatibility(self, small_config):
         """Test that caching works in ParScale mode."""
-        config = Qwen2ParScaleConfig(
-            parscale_n=2,
-            parscale_n_tokens=16,
-            hidden_size=32,
-            num_hidden_layers=1,
-            vocab_size=50,
-        )
-        model = Qwen2ParScaleForCausalLM(config)
+        model = Qwen2ParScaleForCausalLM(small_config)
 
-        input_ids = torch.randint(0, config.vocab_size, (1, 3))
+        input_ids = torch.randint(0, small_config.vocab_size, (1, 3))
 
         # First forward pass with cache
         output1 = model(input_ids, use_cache=True)
         assert output1.past_key_values is not None
 
         # Second forward pass with cached states
-        new_tokens = torch.randint(0, config.vocab_size, (1, 1))
+        new_tokens = torch.randint(0, small_config.vocab_size, (1, 1))
         output2 = model(
             new_tokens, past_key_values=output1.past_key_values, use_cache=True
         )
 
         # Should work without errors
-        assert output2.logits.shape == (1, 1, config.vocab_size)
+        assert output2.logits.shape == (1, 1, small_config.vocab_size)
+
 
 
 class TestCrossAttentionCompatibility:
