@@ -141,6 +141,9 @@ class ParScaleCrossAttnModel(ParScaleBaseModel):
             replica_rope_config.max_position_embeddings = config.parscale_n
             self.replica_rotary_emb = Qwen2RotaryEmbedding(config=replica_rope_config)
 
+        # Re-initialize weights to ensure cross-attention layers are initialized
+        self.post_init()
+
     @property
     def use_prefix_cache(self) -> bool:
         """Whether to use prefix cache based on parscale configuration."""
