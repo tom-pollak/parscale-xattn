@@ -74,10 +74,11 @@ class TestAggregationLayer:
         ]
 
         for parscale_n, hidden_size in configs:
-            config_dict = small_config_dict.update(
+            config_dict_copy = small_config_dict.copy()
+            config_dict_copy.update(
                 dict(parscale_n=parscale_n, hidden_size=hidden_size)
             )
-            config = Qwen2ParScaleConfig(**config_dict)
+            config = Qwen2ParScaleConfig(**config_dict_copy)
             model = ParScaleBaseModel(config)
 
             # Check dimensions
@@ -106,7 +107,7 @@ class TestOutputAggregation:
         inputs_embeds = model.embed_tokens(input_ids)
 
         # Should be replicated to (parscale_n * batch_size, seq_len, hidden_size)
-        replicated_embeds = rearrange(
+        replicated_embeds = repeat(
             inputs_embeds,
             "b s h -> (n_parscale b) s h",
             n_parscale=small_config.parscale_n,

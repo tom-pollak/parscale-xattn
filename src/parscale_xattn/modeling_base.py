@@ -190,7 +190,7 @@ class Qwen2Attention(nn.Module):
         self.o_proj = nn.Linear(
             config.num_attention_heads * self.head_dim, config.hidden_size, bias=False
         )
-        if config.parscale_n > 1:
+        if config.parscale_n > 1 and config.parscale_n_tokens > 0:
             self.prefix_k = nn.Parameter(
                 torch.empty(
                     (

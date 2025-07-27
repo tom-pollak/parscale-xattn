@@ -156,8 +156,12 @@ class TestAttentionMaskExpansion:
             small_config.parscale_n * batch_size, 1, seq_len, seq_len
         )
         position_embeddings = (
-            torch.randn(batch_size, seq_len, attention.head_dim),
-            torch.randn(batch_size, seq_len, attention.head_dim),
+            torch.randn(
+                small_config.parscale_n * batch_size, seq_len, attention.head_dim
+            ),
+            torch.randn(
+                small_config.parscale_n * batch_size, seq_len, attention.head_dim
+            ),
         )
 
         output, _ = attention(

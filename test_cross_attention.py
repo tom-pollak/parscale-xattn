@@ -1,214 +1,126 @@
-#!/usr/bin/env python3
 """
-Simple test script to reproduce and debug cross-attention shape mismatch issue.
-Allows rapid iteration on the fix without running full training.
-"""
+Pytest-based tests for cross-attention functionality and configuration.
 
+This module verifies:
+- The successful forward pass of models with cross-attention enabled.
+- The successful forward pass of standard models (parscale_n=1) as a control.
+- That invalid model configurations raise appropriate validation errors.
+
+Tests use small model configurations defined in `tests/conftest.py` for speed.
+"""
+import pytest
 import torch
+
 from src.parscale_xattn import Qwen2ParScaleConfig, Qwen2ParScaleForCausalLM
 
+# Note: conftest.py provides the following fixtures used in this file:
+# - small_config_dict: A dictionary for a small model config (parscale_n > 1).
+# - small_config_no_replica: A Qwen2ParScaleConfig for a standard model (parscale_n=1).
 
-def test_cross_attention_shapes(parscale_n=4, seq_len=32, batch_size=2):
-    """Test cross-attention with specified configuration."""
-    print(
-        f"Testing cross-attention with parscale_n={parscale_n}, seq_len={seq_len}, batch_size={batch_size}"
-    )
 
-    # Create config with cross-attention enabled
-    config = Qwen2ParScaleConfig(
-        vocab_size=1000,
-        hidden_size=1536,
-        intermediate_size=8960,
-        num_hidden_layers=4,  # Small for quick testing
-        num_attention_heads=12,
-        num_key_value_heads=2,
-        max_position_embeddings=2048,
-        parscale_n=parscale_n,
-        enable_cross_attn=True,
-        parscale_cross_attn_layers=[0, 2],  # Enable on first and third layers
-        parscale_n_tokens=48,
-    )
+def test_cross_attention_forward_pass(small_config_dict):
+    """
+    Tests that a model with cross-attention enabled can perform a forward pass
+    without shape-related errors.
+    """
+    # Enable cross-attention on the single layer of the small config
+    config_dict = small_config_dict.copy()
+    config_dict["enable_cross_attn"] = True
+    # There is only one hidden layer in the small config
+    config_dict["parscale_cross_attn_layers"] = [0]
+    config = Qwen2ParScaleConfig(**config_dict)
 
-    print(
-        f"Config: hidden_size={config.hidden_size}, num_attention_heads={config.num_attention_heads}"
-    )
-    print(f"Cross-attention enabled on layers: {config.parscale_cross_attn_layers}")
-
-    # Create model with small config for quick testing
     model = Qwen2ParScaleForCausalLM(config)
     model.eval()
 
-    # Create input tensors
-    # For parscale_n > 1, input should have shape (parscale_n * batch_size, seq_len)
+    batch_size = 2
+    seq_len = 8
+    parscale_n = config.parscale_n
+
+    # Input shape for parscale is (parscale_n * batch_size, seq_len)
     input_ids = torch.randint(0, config.vocab_size, (parscale_n * batch_size, seq_len))
     attention_mask = torch.ones_like(input_ids)
 
-    print(f"Input shape: {input_ids.shape}")
-    print(f"Attention mask shape: {attention_mask.shape}")
+    with torch.no_grad():
+        outputs = model(input_ids=input_ids, attention_mask=attention_mask)
 
-    try:
-        # Forward pass - this should reproduce the error
-        with torch.no_grad():
-            outputs = model(input_ids=input_ids, attention_mask=attention_mask)
-
-        print("✅ Forward pass successful!")
-        print(f"Output logits shape: {outputs.logits.shape}")
-        return True
-
-    except RuntimeError as e:
-        print(f"❌ RuntimeError: {e}")
-        return False
-    except Exception as e:
-        print(f"❌ Unexpected error: {e}")
-        return False
-
-
-def test_standard_attention(seq_len=32, batch_size=2):
-    """Test standard attention (parscale_n=1) for comparison."""
-    print(f"\nTesting standard attention (parscale_n=1)")
-
-    # Create config without cross-attention (standard mode)
-    config = Qwen2ParScaleConfig(
-        vocab_size=1000,
-        hidden_size=1536,
-        intermediate_size=8960,
-        num_hidden_layers=4,
-        num_attention_heads=12,
-        num_key_value_heads=2,
-        max_position_embeddings=2048,
-        parscale_n=1,  # Standard mode
-        enable_cross_attn=False,
-        parscale_n_tokens=0,
+    assert outputs.logits is not None
+    assert outputs.logits.shape == (
+        parscale_n * batch_size,
+        seq_len,
+        config.vocab_size,
     )
 
+
+def test_standard_attention_forward_pass(small_config_no_replica):
+    """
+    Tests that a standard model (parscale_n=1) can perform a forward pass.
+    This acts as a control test.
+    """
+    config = small_config_no_replica
     model = Qwen2ParScaleForCausalLM(config)
     model.eval()
 
-    # Create input tensors (no parscale_n multiplication for standard mode)
+    batch_size = 2
+    seq_len = 8
+
+    # Standard input shape is (batch_size, seq_len)
     input_ids = torch.randint(0, config.vocab_size, (batch_size, seq_len))
     attention_mask = torch.ones_like(input_ids)
 
-    print(f"Input shape: {input_ids.shape}")
+    with torch.no_grad():
+        outputs = model(input_ids=input_ids, attention_mask=attention_mask)
 
-    try:
-        with torch.no_grad():
-            outputs = model(input_ids=input_ids, attention_mask=attention_mask)
-
-        print("✅ Standard attention successful!")
-        print(f"Output logits shape: {outputs.logits.shape}")
-        return True
-
-    except Exception as e:
-        print(f"❌ Standard attention failed: {e}")
-        return False
+    assert outputs.logits is not None
+    assert outputs.logits.shape == (batch_size, seq_len, config.vocab_size)
 
 
-def test_invalid_configurations():
-    """Test that invalid configurations are caught by validation."""
-    print(f"\nTesting invalid configuration validation")
-
-    test_cases = [
+# Test cases for configuration validation, adapted from the original script
+INVALID_CONFIG_TEST_CASES = [
+    pytest.param(
+        {"parscale_n": 1, "enable_cross_attn": True},
+        True,
+        id="cross-attn-with-parscale_n=1",
+    ),
+    pytest.param(
+        {"parscale_n": 1, "parscale_n_tokens": 4},
+        True,
+        id="prefix-tokens-with-parscale_n=1",
+    ),
+    pytest.param(
         {
-            "name": "Cross-attention with parscale_n=1",
-            "config": {"parscale_n": 1, "enable_cross_attn": True},
-            "should_fail": True,
+            "parscale_n": 2,
+            "enable_cross_attn": False,
+            "parscale_cross_attn_layers": [0],
         },
+        True,
+        id="cross-attn-layers-without-enable-flag",
+    ),
+    pytest.param(
         {
-            "name": "Prefix tokens with parscale_n=1",
-            "config": {"parscale_n": 1, "parscale_n_tokens": 48},
-            "should_fail": True,
+            "parscale_n": 1,
+            "enable_cross_attn": False,
+            "parscale_n_tokens": 0,
         },
-        {
-            "name": "Cross-attention layers without enabling cross-attention",
-            "config": {
-                "parscale_n": 4,
-                "enable_cross_attn": False,
-                "parscale_cross_attn_layers": [0, 2],
-            },
-            "should_fail": True,
-        },
-        {
-            "name": "Valid parscale_n=1 (standard Qwen2)",
-            "config": {
-                "parscale_n": 1,
-                "enable_cross_attn": False,
-                "parscale_n_tokens": 0,
-            },
-            "should_fail": False,
-        },
-    ]
-
-    results = []
-    for test_case in test_cases:
-        try:
-            config = Qwen2ParScaleConfig(
-                vocab_size=1000,
-                hidden_size=1536,
-                num_hidden_layers=4,
-                num_attention_heads=12,
-                num_key_value_heads=2,
-                **test_case["config"],
-            )
-            # If we get here, config creation succeeded
-            if test_case["should_fail"]:
-                print(
-                    f"❌ {test_case['name']}: Expected validation error but config was created"
-                )
-                results.append(False)
-            else:
-                print(f"✅ {test_case['name']}: Valid config created successfully")
-                results.append(True)
-
-        except ValueError as e:
-            if test_case["should_fail"]:
-                print(
-                    f"✅ {test_case['name']}: Caught expected validation error: {str(e)[:80]}..."
-                )
-                results.append(True)
-            else:
-                print(f"❌ {test_case['name']}: Unexpected validation error: {e}")
-                results.append(False)
-        except Exception as e:
-            print(f"❌ {test_case['name']}: Unexpected error: {e}")
-            results.append(False)
-
-    return all(results)
+        False,
+        id="valid-parscale_n=1-config",
+    ),
+]
 
 
-if __name__ == "__main__":
-    print("=" * 60)
-    print("Cross-Attention Refactored Implementation Test")
-    print("=" * 60)
+@pytest.mark.parametrize("config_changes, should_fail", INVALID_CONFIG_TEST_CASES)
+def test_config_validation(small_config_dict, config_changes, should_fail):
+    """
+    Tests that Qwen2ParScaleConfig validation catches invalid configurations.
+    """
+    config_dict = small_config_dict.copy()
+    config_dict.update(config_changes)
 
-    # Test configuration validation first
-    config_validation_success = test_invalid_configurations()
-
-    # Test standard attention (should work)
-    standard_success = test_standard_attention()
-
-    # Test cross-attention with refactored implementation
-    cross_success = test_cross_attention_shapes(parscale_n=4)
-
-    print("\n" + "=" * 60)
-    print("SUMMARY:")
-    print(
-        f"Configuration validation: {'✅ PASS' if config_validation_success else '❌ FAIL'}"
-    )
-    print(
-        f"Standard attention (parscale_n=1): {'✅ PASS' if standard_success else '❌ FAIL'}"
-    )
-    print(
-        f"Cross attention (parscale_n=4): {'✅ PASS' if cross_success else '❌ FAIL'}"
-    )
-
-    if config_validation_success and cross_success and standard_success:
-        print("\n🎉 All tests passed!")
-        print("✅ Configuration validation prevents invalid states")
-        print("✅ Refactored cross-attention implementation works correctly")
-        print("✅ Tensor dimension assertions will catch runtime inconsistencies")
-    elif not config_validation_success:
-        print("\n❌ Configuration validation failed - invalid states not being caught")
-    elif not cross_success and standard_success:
-        print("\n🔍 Cross-attention still has issues - needs further debugging.")
+    if should_fail:
+        with pytest.raises(ValueError):
+            Qwen2ParScaleConfig(**config_dict)
     else:
-        print("\n❌ Multiple issues detected - check implementation.")
+        try:
+            Qwen2ParScaleConfig(**config_dict)
+        except ValueError as e:
+            pytest.fail(f"Configuration should be valid, but raised ValueError: {e}")

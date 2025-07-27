@@ -206,7 +206,19 @@ class ParScaleCrossAttnModel(ParScaleBaseModel):
                     position_ids, "b s -> (n_parscale b) s", n_parscale=self.parscale_n
                 )
 
-        # Standard Hugging Face cache initialization
+        # ParScale cache initialization
+        if self.use_prefix_cache:
+            if use_cache and (
+                past_key_values is None or past_key_values.get_seq_length() == 0
+            ):
+                from .modeling_base import ParscaleCache
+
+                past_key_values = ParscaleCache(
+                    [layer.self_attn.prefix_k for layer in self.layers],
+                    [layer.self_attn.prefix_v for layer in self.layers],
+                )
+
+        # Standard Hugging Face cache initialization for non-parscale cases
         if use_cache and past_key_values is None:
             from transformers.cache_utils import DynamicCache
 
@@ -311,12 +323,10 @@ class ParScaleCrossAttnModel(ParScaleBaseModel):
 
         if self.parscale_n > 1:
             # output aggregation, based on dynamic weighted sum.
-            from einops import rearrange
-
             attn = torch.unsqueeze(
                 torch.softmax(
                     self.aggregate_layer(
-                        repeat(
+                        rearrange(
                             hidden_states,
                             "(n_parscale b) s h -> b s (h n_parscale)",
                             n_parscale=self.parscale_n,
@@ -331,7 +341,7 @@ class ParScaleCrossAttnModel(ParScaleBaseModel):
                     self.parscale_aggregate_attn_smoothing / self.parscale_n
                 )
             hidden_states = torch.sum(
-                repeat(
+                rearrange(
                     hidden_states,
                     "(n_parscale b) s h -> b s n_parscale h",
                     n_parscale=self.parscale_n,

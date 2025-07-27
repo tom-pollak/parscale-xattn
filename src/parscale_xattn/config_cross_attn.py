@@ -50,20 +50,32 @@ class ParScaleCrossAttnConfig(ParScaleBaseConfig):
 
     def _validate_cross_attn_config(self):
         """Validate cross-attention specific configuration parameters."""
-        # Cross-attention validation
-        if self.enable_cross_attn and self.parscale_n == 1:
-            raise ValueError(
-                "Cross-attention (enable_cross_attn=True) requires parscale_n > 1, "
-                f"but got parscale_n={self.parscale_n}. Either disable cross-attention "
-                "or increase parscale_n."
-            )
-
-        # When parscale_n=1, enforce standard behavior
+        # When parscale_n=1, no cross-attention features should be enabled
         if self.parscale_n == 1:
             if self.enable_cross_attn:
+                logger.warning(
+                    "Cross-attention is enabled (enable_cross_attn=True) but parscale_n=1. "
+                    "Disabling cross-attention."
+                )
+                self.enable_cross_attn = False
+            if self.enable_replica_rope:
+                logger.warning(
+                    "Replica RoPE is enabled (enable_replica_rope=True) but parscale_n=1. "
+                    "Disabling replica RoPE."
+                )
+                self.enable_replica_rope = False
+
+        # Replica RoPE validation
+        if self.enable_replica_rope:
+            if not self.enable_cross_attn:
                 raise ValueError(
-                    f"Cross-attention should be disabled when parscale_n=1, "
-                    f"but enable_cross_attn={self.enable_cross_attn}"
+                    "Replica RoPE (enable_replica_rope=True) requires cross-attention to be enabled "
+                    "(enable_cross_attn=True), but enable_cross_attn=False."
+                )
+            if self.parscale_n <= 1:
+                raise ValueError(
+                    f"Replica RoPE (enable_replica_rope=True) requires parscale_n > 1, "
+                    f"but got parscale_n={self.parscale_n}."
                 )
 
         # Cross-attention layers validation
@@ -92,16 +104,3 @@ class ParScaleCrossAttnConfig(ParScaleBaseConfig):
                         f"Layer index {layer_idx} in parscale_cross_attn_layers is >= num_hidden_layers "
                         f"({self.num_hidden_layers})"
                     )
-
-        # Replica RoPE validation
-        if self.enable_replica_rope and not self.enable_cross_attn:
-            raise ValueError(
-                "Replica RoPE (enable_replica_rope=True) requires cross-attention to be enabled "
-                "(enable_cross_attn=True), but enable_cross_attn=False."
-            )
-
-        if self.enable_replica_rope and self.parscale_n == 1:
-            raise ValueError(
-                "Replica RoPE (enable_replica_rope=True) requires parscale_n > 1, "
-                f"but got parscale_n={self.parscale_n}."
-            )
