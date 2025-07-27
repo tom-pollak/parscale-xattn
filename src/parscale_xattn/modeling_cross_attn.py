@@ -227,7 +227,7 @@ class ParScaleCrossAttnModel(ParScaleBaseModel):
                         )
                         past_key_values.value_cache[layer_idx] = self.layers[
                             layer_idx
-                        ].self.attn.prefix_v.repeat(
+                        ].self_attn.prefix_v.repeat(
                             inputs_embeds.shape[0] // self.config.parscale_n, 1, 1, 1
                         )
 
