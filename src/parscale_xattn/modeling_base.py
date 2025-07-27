@@ -240,24 +240,62 @@ class Qwen2Attention(nn.Module):
                 key_states, value_states, self.layer_idx, cache_kwargs
             )
 
-        if self.config.parscale_n > 1 and self.config.parscale_n_tokens > 0:
+        if self.config.parscale_n > 1:
             # Expand attention mask to contain the prefix tokens
-            n_prefix_tokens = self.config.parscale_n_tokens
+            n_virtual_tokens = self.config.parscale_n_tokens
 
             if attention_mask is not None:
-                # Create a prefix mask of ones (no masking)
-                prefix_mask = torch.ones(
-                    (
-                        attention_mask.shape[0],
-                        attention_mask.shape[1],
-                        attention_mask.shape[2],
-                        n_prefix_tokens,
-                    ),
-                    dtype=attention_mask.dtype,
-                    device=attention_mask.device,
+                attention_mask = torch.cat(
+                    [
+                        torch.zeros(
+                            (
+                                attention_mask.shape[0],
+                                attention_mask.shape[1],
+                                attention_mask.shape[2],
+                                self.config.parscale_n_tokens,
+                            ),
+                            dtype=attention_mask.dtype,
+                            device=attention_mask.device,
+                        ),
+                        attention_mask,
+                    ],
+                    dim=3,
                 )
-                # Concatenate the prefix mask with the original attention mask
-                attention_mask = torch.cat([prefix_mask, attention_mask], dim=-1)
+
+            if query_states.size(2) != 1:
+                query_states = torch.cat(
+                    [
+                        torch.zeros(
+                            [
+                                query_states.size(0),
+                                query_states.size(1),
+                                n_virtual_tokens,
+                                query_states.size(3),
+                            ],
+                            dtype=query_states.dtype,
+                            device=query_states.device,
+                        ),
+                        query_states,
+                    ],
+                    dim=2,
+                )
+                if attention_mask is not None:
+                    attention_mask = torch.cat(
+                        [
+                            torch.zeros(
+                                (
+                                    attention_mask.shape[0],
+                                    attention_mask.shape[1],
+                                    self.config.parscale_n_tokens,
+                                    attention_mask.shape[3],
+                                ),
+                                dtype=attention_mask.dtype,
+                                device=attention_mask.device,
+                            ),
+                            attention_mask,
+                        ],
+                        dim=2,
+                    )
 
         sliding_window = None
         if (
