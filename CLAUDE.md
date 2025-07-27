@@ -70,7 +70,7 @@ model = Qwen2ParScaleForCausalLM(config)
 
 # ParScale with cross-attention on specific layers
 config = Qwen2ParScaleConfig(
-    parscale_n=4, 
+    parscale_n=4,
     enable_cross_attn=True,
     parscale_cross_attn_layers=[0, 4, 8, 12]
 )

@@ -9,7 +9,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent.parent / "src"))
 
 from parscale_xattn import Qwen2ParScaleConfig
-from parscale_xattn.modeling_base import ParScaleBaseAttention, ParscaleCache
+from parscale_xattn.modeling_base import Qwen2Attention, ParscaleCache
 from parscale_xattn.modeling_cross_attn import ParScaleCrossAttnModel
 
 # Import ground truth for comparison
@@ -23,7 +23,7 @@ class TestPrefixTokenCreation:
     def test_no_prefix_tokens_standard_mode(self):
         """Test that no prefix tokens are created in standard Qwen2 mode (parscale_n=1)."""
         config = Qwen2ParScaleConfig(parscale_n=1, parscale_n_tokens=0)
-        attention = ParScaleBaseAttention(config, layer_idx=0)
+        attention = Qwen2Attention(config, layer_idx=0)
         
         # Should not have prefix parameters
         assert not hasattr(attention, 'prefix_k')
@@ -32,7 +32,7 @@ class TestPrefixTokenCreation:
     def test_prefix_tokens_created_parscale_mode(self):
         """Test that prefix tokens are created in ParScale mode (parscale_n > 1)."""
         config = Qwen2ParScaleConfig(parscale_n=4, parscale_n_tokens=48)
-        attention = ParScaleBaseAttention(config, layer_idx=0)
+        attention = Qwen2Attention(config, layer_idx=0)
         
         # Should have prefix parameters
         assert hasattr(attention, 'prefix_k')
@@ -59,7 +59,7 @@ class TestPrefixTokenCreation:
         
         for parscale_n, n_tokens in configs:
             config = Qwen2ParScaleConfig(parscale_n=parscale_n, parscale_n_tokens=n_tokens)
-            attention = ParScaleBaseAttention(config, layer_idx=0)
+            attention = Qwen2Attention(config, layer_idx=0)
             
             expected_shape = (parscale_n, config.num_key_value_heads, n_tokens, attention.head_dim)
             assert attention.prefix_k.shape == expected_shape
@@ -148,7 +148,7 @@ class TestAttentionMaskExpansion:
     def test_attention_mask_expansion(self):
         """Test that attention masks are properly expanded for prefix tokens."""
         config = Qwen2ParScaleConfig(parscale_n=4, parscale_n_tokens=48)
-        attention = ParScaleBaseAttention(config, layer_idx=0)
+        attention = Qwen2Attention(config, layer_idx=0)
         
         batch_size = 2
         seq_len = 10

@@ -161,7 +161,7 @@ class ParscaleCache(DynamicCache):
         super().reorder_cache(beam_idx)
 
 
-class ParScaleBaseAttention(nn.Module):
+class Qwen2Attention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper with ParScale prefix tokens"""
 
     def __init__(self, config: ParScaleBaseConfig, layer_idx: int):
@@ -363,7 +363,7 @@ class ParScaleBaseDecoderLayer(nn.Module):
     def __init__(self, config: ParScaleBaseConfig, layer_idx: int):
         super().__init__()
         self.hidden_size = config.hidden_size
-        self.self_attn = ParScaleBaseAttention(config=config, layer_idx=layer_idx)
+        self.self_attn = Qwen2Attention(config=config, layer_idx=layer_idx)
         self.mlp = Qwen2MLP(config)
         self.input_layernorm = Qwen2RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = Qwen2RMSNorm(
