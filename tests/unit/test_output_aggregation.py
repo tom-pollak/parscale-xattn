@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 import torch
 import torch.nn as nn
-from einops import rearrange
+from einops import rearrange, repeat
 
 # Add src to path
 sys.path.append(str(Path(__file__).parent.parent.parent / "src"))
@@ -320,9 +320,11 @@ class TestAggregationMathematicalProperties:
         # Set seeds for reproducibility
         torch.manual_seed(42)
         model1 = ParScaleCrossAttnModel(small_config)
+        model1.eval()
 
         torch.manual_seed(42)
         model2 = ParScaleCrossAttnModel(small_config)
+        model2.eval()
 
         # Same input
         input_ids = torch.randint(0, small_config.vocab_size, (1, 3))

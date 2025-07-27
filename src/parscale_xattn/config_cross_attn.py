@@ -53,17 +53,13 @@ class ParScaleCrossAttnConfig(ParScaleBaseConfig):
         # When parscale_n=1, no cross-attention features should be enabled
         if self.parscale_n == 1:
             if self.enable_cross_attn:
-                logger.warning(
-                    "Cross-attention is enabled (enable_cross_attn=True) but parscale_n=1. "
-                    "Disabling cross-attention."
+                raise ValueError(
+                    "Cross-attention (enable_cross_attn=True) requires parscale_n > 1, but got parscale_n=1."
                 )
-                self.enable_cross_attn = False
             if self.enable_replica_rope:
-                logger.warning(
-                    "Replica RoPE is enabled (enable_replica_rope=True) but parscale_n=1. "
-                    "Disabling replica RoPE."
+                raise ValueError(
+                    "Replica RoPE (enable_replica_rope=True) requires parscale_n > 1, but got parscale_n=1."
                 )
-                self.enable_replica_rope = False
 
         # Replica RoPE validation
         if self.enable_replica_rope:
