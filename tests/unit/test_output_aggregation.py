@@ -1,10 +1,11 @@
 """Unit tests for ParScale output aggregation system."""
 
+import sys
+from pathlib import Path
+
 import pytest
 import torch
 import torch.nn as nn
-import sys
-from pathlib import Path
 from einops import rearrange
 
 # Add src to path
@@ -16,7 +17,7 @@ from parscale_xattn.modeling_cross_attn import ParScaleCrossAttnModel
 
 # Import ground truth for comparison
 sys.path.append(str(Path(__file__).parent.parent / "ground_truth"))
-from config import create_ground_truth_config, create_ground_truth_base_model
+from config import create_ground_truth_base_model, create_ground_truth_config
 
 
 @pytest.fixture(scope="class")
@@ -28,12 +29,9 @@ def model(small_config):
 class TestAggregationLayer:
     """Test the MLP aggregation layer structure."""
 
-    def test_aggregation_layer_creation_standard_mode(self):
+    def test_aggregation_layer_creation_standard_mode(self, small_config_no_replica):
         """Test that no aggregation layer is created in standard mode (parscale_n=1)."""
-        config = Qwen2ParScaleConfig(parscale_n=1, parscale_n_tokens=0)
-        model = ParScaleBaseModel(config)
-
-        # Should not have aggregation layer
+        model = ParScaleBaseModel(small_config_no_replica)
         assert not hasattr(model, "aggregate_layer") or model.aggregate_layer is None
 
     def test_aggregation_layer_creation_parscale_mode(self, small_config):
@@ -51,7 +49,10 @@ class TestAggregationLayer:
         # Check first linear layer
         first_layer = model.aggregate_layer[0]
         assert isinstance(first_layer, nn.Linear)
-        assert first_layer.in_features == small_config.parscale_n * small_config.hidden_size
+        assert (
+            first_layer.in_features
+            == small_config.parscale_n * small_config.hidden_size
+        )
         assert first_layer.out_features == small_config.hidden_size
 
         # Check activation
@@ -64,7 +65,7 @@ class TestAggregationLayer:
         assert second_layer.in_features == small_config.hidden_size
         assert second_layer.out_features == small_config.parscale_n
 
-    def test_aggregation_layer_different_configurations(self):
+    def test_aggregation_layer_different_configurations(self, small_config_dict):
         """Test aggregation layer for different ParScale configurations."""
         configs = [
             (2, 128),  # 2 replicas, hidden_size 128
@@ -73,9 +74,10 @@ class TestAggregationLayer:
         ]
 
         for parscale_n, hidden_size in configs:
-            config = Qwen2ParScaleConfig(
-                parscale_n=parscale_n, parscale_n_tokens=48, hidden_size=hidden_size
+            config_dict = small_config_dict.update(
+                dict(parscale_n=parscale_n, hidden_size=hidden_size)
             )
+            config = Qwen2ParScaleConfig(**config_dict)
             model = ParScaleBaseModel(config)
 
             # Check dimensions
@@ -142,7 +144,12 @@ class TestOutputAggregation:
         )  # [b s n_parscale 1]
 
         # Check attention shape and properties
-        expected_attn_shape = (self.batch_size, self.seq_len, small_config.parscale_n, 1)
+        expected_attn_shape = (
+            self.batch_size,
+            self.seq_len,
+            small_config.parscale_n,
+            1,
+        )
         assert attn.shape == expected_attn_shape
 
         # Attention weights should sum to 1 across replicas
