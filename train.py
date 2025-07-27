@@ -135,16 +135,14 @@ def init_wandb(accelerator: Accelerator) -> dict:
         Dictionary of wandb config values
     """
     # Initialize on main process
+    shared_object = [None]
     if accelerator.is_main_process:
-        run = wandb.init(project=os.environ.get("WANDB_PROJECT", "parscale-xattn"))
-        os.environ["WANDB_RUN_ID"] = run.id
-        wandb_config = OmegaConf.from_dotlist(
+        wandb.init(project=os.environ.get("WANDB_PROJECT", "parscale-xattn"))
+        shared_object[0] = OmegaConf.from_dotlist(
             [f"{k}={v}" for k, v in dict(wandb.config).items()]
         )
-    else:
-        wandb_config = {}
 
-    wandb_config = broadcast_object_list([wandb_config], from_process=0).pop()
+    wandb_config = broadcast_object_list(shared_object, from_process=0).pop()
     assert isinstance(wandb_config, dict)
     return wandb_config
 
