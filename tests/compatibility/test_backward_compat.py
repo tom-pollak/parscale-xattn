@@ -12,11 +12,11 @@ from parscale_xattn import Qwen2ParScaleConfig, Qwen2ParScaleForCausalLM
 from parscale_xattn.modeling_qwen2_parscale import (
     Qwen2Model, 
     Qwen2ForCausalLM,
-    Qwen2Attention,
     Qwen2DecoderLayer,
     Qwen2MLP,
     Qwen2RMSNorm
 )
+from parscale_xattn.modeling_base import Qwen2Attention
 
 
 class TestAPICompatibility:
