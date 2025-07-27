@@ -8,7 +8,7 @@ from typing import Optional, Tuple, Union, List
 
 import torch
 from torch import nn
-from einops import repeat
+from einops import repeat, rearrange
 from transformers.cache_utils import Cache
 from transformers.modeling_flash_attention_utils import FlashAttentionKwargs
 from transformers.modeling_outputs import (
@@ -328,7 +328,7 @@ class ParScaleCrossAttnModel(ParScaleBaseModel):
             attn = torch.unsqueeze(
                 torch.softmax(
                     self.aggregate_layer(
-                        rearrange(
+                        repeat(
                             hidden_states,
                             "(n_parscale b) s h -> b s (h n_parscale)",
                             n_parscale=self.parscale_n,
@@ -343,7 +343,7 @@ class ParScaleCrossAttnModel(ParScaleBaseModel):
                     self.parscale_aggregate_attn_smoothing / self.parscale_n
                 )
             hidden_states = torch.sum(
-                rearrange(
+                repeat(
                     hidden_states,
                     "(n_parscale b) s h -> b s n_parscale h",
                     n_parscale=self.parscale_n,
