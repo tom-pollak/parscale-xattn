@@ -117,67 +117,24 @@ def eager_attention_forward(
 
 
 class ParscaleCache(DynamicCache):
-    """
-    A cache that extends DynamicCache to support ParScale's prefix tokens.
-    The prefix tokens are stored in the cache and are not part of the input sequence.
-    """
-
-    def __init__(self, config: ParScaleBaseConfig, batch_size: int, dtype: torch.dtype, device: torch.device):
+    def __init__(self, prefix_keys: List[torch.Tensor], prefix_values: List[torch.Tensor]):
         super().__init__()
-        self.parscale_n = config.parscale_n
-        self.n_prefix_tokens = config.parscale_n_tokens
-        self.num_key_value_heads = config.num_key_value_heads
-        self.head_dim = config.hidden_size // config.num_attention_heads
-
-        # Initialize the cache with the correct dimensions, including the prefix tokens
-        for _ in range(config.num_hidden_layers):
-            self.key_cache.append(
-                torch.zeros(
-                    (batch_size * self.parscale_n, self.num_key_value_heads, self.n_prefix_tokens, self.head_dim),
-                    dtype=dtype,
-                    device=device,
-                )
-            )
-            self.value_cache.append(
-                torch.zeros(
-                    (batch_size * self.parscale_n, self.num_key_value_heads, self.n_prefix_tokens, self.head_dim),
-                    dtype=dtype,
-                    device=device,
-                )
-            )
-
-    def update(
-        self,
-        key_states: torch.Tensor,
-        value_states: torch.Tensor,
-        layer_idx: int,
-        cache_kwargs: Optional[dict] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        # Prepend the prefix tokens to the new key/value states
-        key_states = torch.cat([self.key_cache[layer_idx], key_states], dim=-2)
-        value_states = torch.cat([self.value_cache[layer_idx], value_states], dim=-2)
-
-        # Update the cache with the combined state
-        self.key_cache[layer_idx] = key_states
-        self.value_cache[layer_idx] = value_states
-
-        return key_states, value_states
+        self.key_cache: List[torch.Tensor] = prefix_keys
+        self.value_cache: List[torch.Tensor] = prefix_values
+        self.parscale_n = prefix_keys[0].size(0) if len(prefix_keys) > 0 else 1
+        self.n_prefix_tokens = prefix_keys[0].shape[-2] if len(prefix_keys) > 0 else 0
+        self._seen_tokens = self.n_prefix_tokens
 
     def get_seq_length(self, layer_idx: int = 0) -> int:
-        # The sequence length is the total length of the cache, including the prefix
         if len(self.key_cache) <= layer_idx:
             return 0
         return self.key_cache[layer_idx].shape[-2]
 
-    def get_max_length(self) -> Optional[int]:
-        # Not yet supported
-        return None
-
     def reorder_cache(self, beam_idx: torch.LongTensor):
         """Reorders the cache for beam search, given the selected beam indices."""
-        for layer_idx in range(len(self.key_cache)):
-            self.key_cache[layer_idx] = self.key_cache[layer_idx].index_select(0, beam_idx)
-            self.value_cache[layer_idx] = self.value_cache[layer_idx].index_select(0, beam_idx)
+        batch_size = self.key_cache[0].size(0) // self.parscale_n
+        beam_idx = torch.cat([beam_idx + batch_size * i for i in range(self.parscale_n)])
+        super().reorder_cache(beam_idx)
 
 
 
@@ -755,24 +712,24 @@ class ParScaleBaseModel(ParScaleBasePreTrainedModel):
             # The trained prefix is saved in layer.self_attn.prefix_k / layer.self_attn.prefix_v
             # We extract them to construct ParscaleCache.
             if past_key_values is None:
-                past_key_values = ParscaleCache(
-                    self.config,
-                    inputs_embeds.shape[0] // self.parscale_n,
-                    dtype=inputs_embeds.dtype,
-                    device=inputs_embeds.device,
-                )
-            if past_key_values.get_seq_length() == 0:
-                for layer_idx in range(self.config.num_hidden_layers):
-                    past_key_values.key_cache[layer_idx] = self.layers[
-                        layer_idx
-                    ].self_attn.prefix_k.repeat(
-                        inputs_embeds.shape[0] // self.parscale_n, 1, 1, 1
+                batch_size = inputs_embeds.shape[0] // self.parscale_n
+                prefix_keys = [
+                    repeat(
+                        layer.self_attn.prefix_k,
+                        "n ... -> (b n) ...",
+                        b=batch_size,
                     )
-                    past_key_values.value_cache[layer_idx] = self.layers[
-                        layer_idx
-                    ].self.attn.prefix_v.repeat(
-                        inputs_embeds.shape[0] // self.parscale_n, 1, 1, 1
+                    for layer in self.layers
+                ]
+                prefix_values = [
+                    repeat(
+                        layer.self_attn.prefix_v,
+                        "n ... -> (b n) ...",
+                        b=batch_size,
                     )
+                    for layer in self.layers
+                ]
+                past_key_values = ParscaleCache(prefix_keys, prefix_values)
 
         if use_cache and past_key_values is None:
             past_key_values = DynamicCache()

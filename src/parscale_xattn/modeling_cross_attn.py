@@ -210,26 +210,27 @@ class ParScaleCrossAttnModel(ParScaleBaseModel):
             if self.use_prefix_cache and use_cache:
                 # The trained prefix is saved in layer.self_attn.prefix_k / layer.self_attn.prefix_v
                 # We extract them to construct ParscaleCache.
-                if past_key_values is None or past_key_values.get_seq_length() == 0:
+                if past_key_values is None:
                     from .modeling_base import ParscaleCache
 
-                    past_key_values = ParscaleCache(
-                        self.config,
-                        inputs_embeds.shape[0] // self.config.parscale_n,
-                        dtype=inputs_embeds.dtype,
-                        device=inputs_embeds.device,
-                    )
-                    for layer_idx in range(self.config.num_hidden_layers):
-                        past_key_values.key_cache[layer_idx] = self.layers[
-                            layer_idx
-                        ].self_attn.prefix_k.repeat(
-                            inputs_embeds.shape[0] // self.config.parscale_n, 1, 1, 1
+                    batch_size = inputs_embeds.shape[0] // self.config.parscale_n
+                    prefix_keys = [
+                        repeat(
+                            layer.self_attn.prefix_k,
+                            "n ... -> (b n) ...",
+                            b=batch_size,
                         )
-                        past_key_values.value_cache[layer_idx] = self.layers[
-                            layer_idx
-                        ].self_attn.prefix_v.repeat(
-                            inputs_embeds.shape[0] // self.config.parscale_n, 1, 1, 1
+                        for layer in self.layers
+                    ]
+                    prefix_values = [
+                        repeat(
+                            layer.self_attn.prefix_v,
+                            "n ... -> (b n) ...",
+                            b=batch_size,
                         )
+                        for layer in self.layers
+                    ]
+                    past_key_values = ParscaleCache(prefix_keys, prefix_values)
 
         # Standard Hugging Face cache initialization
         if use_cache and past_key_values is None:
