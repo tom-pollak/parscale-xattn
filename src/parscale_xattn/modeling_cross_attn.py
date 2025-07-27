@@ -5,6 +5,7 @@ Builds on top of the base ParScale implementation to add cross-replica attention
 
 import copy
 from typing import Optional, Tuple, Union, List
+import warnings
 
 import torch
 from torch import nn
@@ -131,11 +132,7 @@ class ParScaleCrossAttnModel(ParScaleBaseModel):
         )
 
         # Add replica rotary embedding if enabled
-        if (
-            config.parscale_n > 1
-            and config.enable_cross_attn
-            and config.enable_replica_rope
-        ):
+        if self.config.enable_replica_rope:
             # Create a copy of config with parscale_n as max_position_embeddings for replica positioning
             replica_rope_config = copy.deepcopy(config)
             replica_rope_config.max_position_embeddings = config.parscale_n
@@ -185,7 +182,7 @@ class ParScaleCrossAttnModel(ParScaleBaseModel):
             )
 
         if self.gradient_checkpointing and self.training and use_cache:
-            logger.warning_once(
+            warnings.warn(
                 "`use_cache=True` is incompatible with gradient checkpointing. Setting `use_cache=False`."
             )
             use_cache = False

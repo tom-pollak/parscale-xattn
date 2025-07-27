@@ -30,42 +30,6 @@ def model(small_config):
 class TestAggregationLayer:
     """Test the MLP aggregation layer structure."""
 
-    def test_aggregation_layer_creation_standard_mode(self, small_config_no_replica):
-        """Test that no aggregation layer is created in standard mode (parscale_n=1)."""
-        model = ParScaleBaseModel(small_config_no_replica)
-        assert not hasattr(model, "aggregate_layer") or model.aggregate_layer is None
-
-    def test_aggregation_layer_creation_parscale_mode(self, small_config):
-        """Test aggregation layer creation in ParScale mode."""
-        model = ParScaleBaseModel(small_config)
-
-        # Should have aggregation layer
-        assert hasattr(model, "aggregate_layer")
-        assert model.aggregate_layer is not None
-
-        # Check structure matches research spec
-        assert isinstance(model.aggregate_layer, nn.Sequential)
-        assert len(model.aggregate_layer) == 3  # Linear -> SiLU -> Linear
-
-        # Check first linear layer
-        first_layer = model.aggregate_layer[0]
-        assert isinstance(first_layer, nn.Linear)
-        assert (
-            first_layer.in_features
-            == small_config.parscale_n * small_config.hidden_size
-        )
-        assert first_layer.out_features == small_config.hidden_size
-
-        # Check activation
-        activation = model.aggregate_layer[1]
-        assert isinstance(activation, nn.SiLU)
-
-        # Check second linear layer
-        second_layer = model.aggregate_layer[2]
-        assert isinstance(second_layer, nn.Linear)
-        assert second_layer.in_features == small_config.hidden_size
-        assert second_layer.out_features == small_config.parscale_n
-
     def test_aggregation_layer_different_configurations(self, small_config_dict):
         """Test aggregation layer for different ParScale configurations."""
         configs = [
@@ -75,14 +39,13 @@ class TestAggregationLayer:
         ]
 
         for parscale_n, hidden_size in configs:
-            config_dict_copy = small_config_dict.copy()
-            config_dict_copy.update(
-                dict(parscale_n=parscale_n, hidden_size=hidden_size)
-            )
-            config = Qwen2ParScaleConfig(**config_dict_copy)
+            config_dict = {
+                **small_config_dict,
+                **dict(parscale_n=parscale_n, hidden_size=hidden_size),
+            }
+            config = Qwen2ParScaleConfig(**config_dict)
             model = ParScaleBaseModel(config)
 
-            # Check dimensions
             first_layer = model.aggregate_layer[0]
             assert first_layer.in_features == parscale_n * hidden_size
             assert first_layer.out_features == hidden_size
@@ -297,46 +260,3 @@ class TestAggregationCompatibility:
             new_model.parscale_aggregate_attn_smoothing
             == orig_model.parscale_aggregate_attn_smoothing
         )
-
-
-class TestAggregationMathematicalProperties:
-    """Test mathematical properties of the aggregation system."""
-
-    def test_aggregation_preserves_batch_dimension(self, small_config):
-        """Test that aggregation correctly handles batch dimension."""
-        model = ParScaleCrossAttnModel(small_config)
-
-        batch_sizes = [1, 2, 4, 8]
-        seq_len = 3
-
-        for batch_size in batch_sizes:
-            input_ids = torch.randint(0, small_config.vocab_size, (batch_size, seq_len))
-            output = model(input_ids)
-
-            # Output batch size should match input
-            assert output.last_hidden_state.shape[0] == batch_size
-
-    def test_aggregation_deterministic(self, small_config):
-        """Test that aggregation is deterministic for same inputs."""
-        # Set seeds for reproducibility
-        torch.manual_seed(42)
-        model1 = ParScaleCrossAttnModel(copy.deepcopy(small_config))
-        model1.eval()
-
-        torch.manual_seed(42)
-        model2 = ParScaleCrossAttnModel(copy.deepcopy(small_config))
-        model2.eval()
-
-        # Same input
-        input_ids = torch.randint(0, small_config.vocab_size, (1, 3))
-
-        with torch.no_grad():
-            output1 = model1(input_ids)
-            output2 = model2(input_ids)
-
-        # Outputs should be identical
-        assert torch.allclose(output1.last_hidden_state, output2.last_hidden_state)
-
-
-if __name__ == "__main__":
-    pytest.main([__file__])

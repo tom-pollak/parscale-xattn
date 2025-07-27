@@ -53,9 +53,7 @@ class TestNumericalEquivalence:
     def test_forward_pass_equivalence(self, model_pair):
         """Test that forward passes produce identical outputs."""
         new_model, orig_model, config = model_pair
-        input_ids = torch.randint(
-            0, config.vocab_size, (self.batch_size, self.seq_len)
-        )
+        input_ids = torch.randint(0, config.vocab_size, (self.batch_size, self.seq_len))
 
         with torch.no_grad():
             new_output = new_model(input_ids)
@@ -64,7 +62,9 @@ class TestNumericalEquivalence:
         # Check logits are identical
         assert torch.allclose(
             new_output.logits, orig_output.logits, atol=1e-5, rtol=1e-4
-        ), f"Logits differ: max diff = {(new_output.logits - orig_output.logits).abs().max()}"
+        ), (
+            f"Logits differ: max diff = {(new_output.logits - orig_output.logits).abs().max()}"
+        )
 
     def test_parameter_count_equivalence(self, model_pair):
         """Test that both models have the same number of parameters."""
@@ -72,16 +72,14 @@ class TestNumericalEquivalence:
         new_params = sum(p.numel() for p in new_model.parameters())
         orig_params = sum(p.numel() for p in orig_model.parameters())
 
-        assert (
-            new_params == orig_params
-        ), f"Parameter count differs: new={new_params}, orig={orig_params}"
+        assert new_params == orig_params, (
+            f"Parameter count differs: new={new_params}, orig={orig_params}"
+        )
 
     def test_gradient_equivalence(self, model_pair):
         """Test that gradients are identical during backpropagation."""
         new_model, orig_model, config = model_pair
-        input_ids = torch.randint(
-            0, config.vocab_size, (self.batch_size, self.seq_len)
-        )
+        input_ids = torch.randint(0, config.vocab_size, (self.batch_size, self.seq_len))
         labels = input_ids.clone()
 
         # Forward and backward pass for new model
@@ -103,23 +101,23 @@ class TestNumericalEquivalence:
         orig_loss.backward()
 
         # Compare losses
-        assert torch.allclose(
-            new_loss, orig_loss, atol=1e-6, rtol=1e-5
-        ), f"Losses differ: new={new_loss}, orig={orig_loss}"
+        assert torch.allclose(new_loss, orig_loss, atol=1e-6, rtol=1e-5), (
+            f"Losses differ: new={new_loss}, orig={orig_loss}"
+        )
 
         # Compare gradients
         for name, param in orig_model.named_parameters():
             if param.grad is not None and name in new_grads:
                 assert torch.allclose(
                     new_grads[name], param.grad, atol=1e-5, rtol=1e-4
-                ), f"Gradients for {name} differ: max diff = {(new_grads[name] - param.grad).abs().max()}"
+                ), (
+                    f"Gradients for {name} differ: max diff = {(new_grads[name] - param.grad).abs().max()}"
+                )
 
     def test_cache_behavior_equivalence(self, model_pair):
         """Test that KV cache behavior is equivalent."""
         new_model, orig_model, config = model_pair
-        input_ids = torch.randint(
-            0, config.vocab_size, (self.batch_size, self.seq_len)
-        )
+        input_ids = torch.randint(0, config.vocab_size, (self.batch_size, self.seq_len))
 
         with torch.no_grad():
             new_output = new_model(input_ids, use_cache=True)
@@ -144,9 +142,9 @@ class TestNumericalEquivalence:
                 orig_output.past_key_values.key_cache,
             )
         ):
-            assert torch.allclose(
-                new_k, orig_k, atol=1e-5, rtol=1e-4
-            ), f"Key cache layer {i} differs: max diff = {(new_k - orig_k).abs().max()}"
+            assert torch.allclose(new_k, orig_k, atol=1e-5, rtol=1e-4), (
+                f"Key cache layer {i} differs: max diff = {(new_k - orig_k).abs().max()}"
+            )
 
         for i, (new_v, orig_v) in enumerate(
             zip(
@@ -154,10 +152,9 @@ class TestNumericalEquivalence:
                 orig_output.past_key_values.value_cache,
             )
         ):
-            assert torch.allclose(
-                new_v, orig_v, atol=1e-5, rtol=1e-4
-            ), f"Value cache layer {i} differs: max diff = {(new_v - orig_v).abs().max()}"
-
+            assert torch.allclose(new_v, orig_v, atol=1e-5, rtol=1e-4), (
+                f"Value cache layer {i} differs: max diff = {(new_v - orig_v).abs().max()}"
+            )
 
 
 class TestCrossAttentionNonInterference:

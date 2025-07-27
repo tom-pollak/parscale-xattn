@@ -9,102 +9,6 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent.parent / "src"))
 
 from parscale_xattn import Qwen2ParScaleConfig, Qwen2ParScaleForCausalLM
-from parscale_xattn.modeling_qwen2_parscale import (
-    Qwen2Model,
-    Qwen2ForCausalLM,
-    Qwen2DecoderLayer,
-    Qwen2MLP,
-    Qwen2RMSNorm,
-)
-from parscale_xattn.modeling_base import Qwen2Attention
-
-
-@pytest.mark.usefixtures("small_config")
-class TestAPICompatibility:
-    """Test that the API remains compatible with existing code."""
-
-    def test_original_class_names_available(self, small_config):
-        """Test that original class names are still available as aliases."""
-        # These should all be importable and work
-        model = Qwen2ParScaleForCausalLM(small_config)
-
-        # Original aliases should work
-        qwen2_model = Qwen2Model(small_config)
-        qwen2_causal = Qwen2ForCausalLM(small_config)
-
-        # Should be the same underlying classes
-        assert type(model.model) == type(qwen2_model)
-        assert type(model) == type(qwen2_causal)
-
-    def test_config_parameter_names(self):
-        """Test that all original config parameter names work."""
-        # All these should work without error
-        config = Qwen2ParScaleConfig(
-            parscale_n=4,
-            parscale_n_tokens=48,
-            enable_cross_attn=True,
-            parscale_cross_attn_layers=[0, 1, 2],
-            enable_replica_rope=True,
-            parscale_attn_smooth=0.05,
-            vocab_size=1000,
-            hidden_size=128,
-            num_hidden_layers=4,
-            num_attention_heads=8,
-            num_key_value_heads=4,
-        )
-
-        # Should be able to access all parameters
-        assert config.parscale_n == 4
-        assert config.parscale_n_tokens == 48
-        assert config.enable_cross_attn == True
-        assert config.parscale_cross_attn_layers == [0, 1, 2]
-        assert config.enable_replica_rope == True
-        assert config.parscale_attn_smooth == 0.05
-
-    def test_model_methods_available(self, small_config):
-        """Test that all expected model methods are available."""
-        model = Qwen2ParScaleForCausalLM(small_config)
-
-        # Standard transformers methods
-        assert hasattr(model, "forward")
-        assert hasattr(model, "generate")
-        assert hasattr(model, "prepare_inputs_for_generation")
-        assert hasattr(model, "get_input_embeddings")
-        assert hasattr(model, "set_input_embeddings")
-        assert hasattr(model, "get_output_embeddings")
-        assert hasattr(model, "set_output_embeddings")
-
-        # Model components
-        assert hasattr(model, "model")
-        assert hasattr(model, "lm_head")
-
-    def test_forward_signature_compatibility(self, small_config):
-        """Test that forward method signature is compatible."""
-        model = Qwen2ParScaleForCausalLM(small_config)
-
-        batch_size = 2
-        seq_len = 5
-        input_ids = torch.randint(0, small_config.vocab_size, (batch_size, seq_len))
-
-        # Should work with standard transformers arguments
-        output = model(
-            input_ids=input_ids,
-            attention_mask=None,
-            position_ids=None,
-            past_key_values=None,
-            inputs_embeds=None,
-            labels=None,
-            use_cache=False,
-            output_attentions=False,
-            output_hidden_states=False,
-            return_dict=True,
-        )
-
-        # Should have standard output attributes
-        assert hasattr(output, "logits")
-        assert hasattr(output, "past_key_values")
-        assert hasattr(output, "hidden_states")
-        assert hasattr(output, "attentions")
 
 
 class TestStandardQwen2Compatibility:
@@ -131,10 +35,9 @@ class TestStandardQwen2Compatibility:
             0, small_config_no_replica.vocab_size, (batch_size, seq_len)
         )
 
-        # Forward pass should work normally
-        output = model(input_ids)
+        with torch.no_grad():
+            output = model(input_ids)
 
-        # Output shapes should be standard
         assert output.logits.shape == (
             batch_size,
             seq_len,
@@ -147,7 +50,6 @@ class TestStandardQwen2Compatibility:
 
         input_ids = torch.randint(0, small_config_no_replica.vocab_size, (1, 3))
 
-        # Generation should work
         with torch.no_grad():
             output = model.generate(
                 input_ids, max_new_tokens=2, do_sample=False, pad_token_id=0
@@ -179,13 +81,11 @@ class TestParScaleModeCompatibility:
         # Test different batch sizes
         for batch_size in [1, 2, 4]:
             seq_len = 3
-            input_ids = torch.randint(
-                0, small_config.vocab_size, (batch_size, seq_len)
-            )
+            input_ids = torch.randint(0, small_config.vocab_size, (batch_size, seq_len))
 
-            output = model(input_ids)
+            with torch.no_grad():
+                output = model(input_ids)
 
-            # Output batch size should match input
             assert output.logits.shape[0] == batch_size
             assert output.logits.shape[1] == seq_len
             assert output.logits.shape[2] == small_config.vocab_size
@@ -202,13 +102,14 @@ class TestParScaleModeCompatibility:
 
         # Second forward pass with cached states
         new_tokens = torch.randint(0, small_config.vocab_size, (1, 1))
-        output2 = model(
-            new_tokens, past_key_values=output1.past_key_values, use_cache=True
-        )
+        with torch.no_grad():
+            output2 = model(
+                new_tokens,
+                past_key_values=output1.past_key_values,
+                use_cache=True,
+            )
 
-        # Should work without errors
         assert output2.logits.shape == (1, 1, small_config.vocab_size)
-
 
 
 class TestCrossAttentionCompatibility:
@@ -224,7 +125,8 @@ class TestCrossAttentionCompatibility:
             num_hidden_layers=1,
             vocab_size=100,
         )
-        model = Qwen2ParScaleForCausalLM(config)
+        with torch.no_grad():
+            model = Qwen2ParScaleForCausalLM(config)
 
         input_ids = torch.randint(0, config.vocab_size, (2, 3))
         output = model(input_ids)

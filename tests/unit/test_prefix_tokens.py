@@ -184,8 +184,7 @@ class TestModelPrefixTokenIntegration:
             if hasattr(layer.self_attn, "prefix_k"):
                 assert layer.self_attn.prefix_k.shape[0] == small_config.parscale_n
                 assert (
-                    layer.self_attn.prefix_k.shape[2]
-                    == small_config.parscale_n_tokens
+                    layer.self_attn.prefix_k.shape[2] == small_config.parscale_n_tokens
                 )
 
     def test_forward_pass_with_prefix_tokens(self, small_config):
@@ -200,7 +199,6 @@ class TestModelPrefixTokenIntegration:
         assert output.past_key_values is not None
         assert isinstance(output.past_key_values, ParscaleCache)
         assert output.past_key_values.parscale_n == small_config.parscale_n
-
 
 
 class TestPrefixTokenCompatibility:

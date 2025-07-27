@@ -161,7 +161,6 @@ class ParscaleCache(DynamicCache):
         super().reorder_cache(beam_idx)
 
 
-
 class Qwen2Attention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper with ParScale prefix tokens"""
 
