@@ -1,5 +1,5 @@
 import os
-from dataclasses import field
+from dataclasses import asdict, field
 from typing import Optional
 
 import torch
@@ -11,13 +11,28 @@ from omegaconf import OmegaConf, SCMode
 from pydantic import TypeAdapter
 from pydantic.dataclasses import dataclass
 from transformers import (
+    AutoConfig,
     AutoModelForCausalLM,
     AutoTokenizer,
     Trainer,
     TrainingArguments,
 )
 
-from src.parscale_xattn import Qwen2ParScaleConfig, Qwen2ParScaleForCausalLM
+from src.parscale_xattn import (
+    Qwen2ParScaleConfig,
+    Qwen2ParScaleForCausalLM,
+    convert_qwen2_to_parscale,
+)
+
+
+@dataclass
+class ModelConfig:
+    hidden_size: int = 256
+    intermediate_size: int = 512
+    num_hidden_layers: int = 12
+    num_attention_heads: int = 32
+    num_key_value_heads: int = 16
+    max_position_embeddings: int = 10000
 
 
 @dataclass
@@ -44,75 +59,27 @@ class TrainingConfig:
     save_total_limit: int = 1  # Keep only final checkpoint
     logging_steps: int = 1000  # Log every 1000 steps for long training
     seed: int = 42
+    lr_scheduler_type: str = "constant_with_warmup"
+    bf16: bool = field(default_factory=torch.cuda.is_available)
     debug: bool = False
 
 
 @dataclass
 class Config:
+    model: ModelConfig = field(default_factory=ModelConfig)
     parscale: ParScaleConfig = field(default_factory=ParScaleConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
 
 
-def convert_qwen2_to_parscale(
-    base_model_name: str, parscale_config: ParScaleConfig
-) -> Qwen2ParScaleForCausalLM:
-    """Convert Qwen2 model to ParScale."""
-    base_model = AutoModelForCausalLM.from_pretrained(
-        base_model_name, torch_dtype=torch.bfloat16
+def mk_model_config(
+    base_model_name: str, model_config: ModelConfig, parscale_config: ParScaleConfig
+) -> Qwen2ParScaleConfig:
+    base_config = AutoConfig.from_pretrained(base_model_name)
+    return Qwen2ParScaleConfig(
+        **base_config.to_dict(),
+        **asdict(parscale_config),
+        **asdict(model_config),
     )
-    base_config = base_model.config
-
-    config_dict = base_config.to_dict()
-    config_dict.update(
-        parscale_n=parscale_config.parscale_n,
-        parscale_n_tokens=parscale_config.parscale_n_tokens,
-        enable_cross_attn=parscale_config.enable_cross_attn,
-        parscale_cross_attn_layers=parscale_config.parscale_cross_attn_layers,
-        enable_replica_rope=parscale_config.enable_replica_rope,
-    )
-    config = Qwen2ParScaleConfig(**config_dict)
-
-    parscale_model = Qwen2ParScaleForCausalLM(config).to(torch.bfloat16)
-
-    # Copy weights
-    parscale_model.model.embed_tokens.load_state_dict(
-        base_model.model.embed_tokens.state_dict()
-    )
-    parscale_model.lm_head.load_state_dict(base_model.lm_head.state_dict())
-    parscale_model.model.norm.load_state_dict(base_model.model.norm.state_dict())
-
-    for i, (base_layer, parscale_layer) in enumerate(
-        zip(base_model.model.layers, parscale_model.model.layers)
-    ):
-        parscale_layer.self_attn.q_proj.load_state_dict(
-            base_layer.self_attn.q_proj.state_dict()
-        )
-        parscale_layer.self_attn.k_proj.load_state_dict(
-            base_layer.self_attn.k_proj.state_dict()
-        )
-        parscale_layer.self_attn.v_proj.load_state_dict(
-            base_layer.self_attn.v_proj.state_dict()
-        )
-        parscale_layer.self_attn.o_proj.load_state_dict(
-            base_layer.self_attn.o_proj.state_dict()
-        )
-        parscale_layer.mlp.load_state_dict(base_layer.mlp.state_dict())
-        parscale_layer.input_layernorm.load_state_dict(
-            base_layer.input_layernorm.state_dict()
-        )
-        parscale_layer.post_attention_layernorm.load_state_dict(
-            base_layer.post_attention_layernorm.state_dict()
-        )
-
-        if config.parscale_n > 1 and config.parscale_n_tokens > 0:
-            torch.nn.init.normal_(
-                parscale_layer.self_attn.prefix_k, std=config.initializer_range
-            )
-            torch.nn.init.normal_(
-                parscale_layer.self_attn.prefix_v, std=config.initializer_range
-            )
-
-    return parscale_model
 
 
 def proc_dataset(dataset_name):
@@ -162,6 +129,7 @@ def init_wandb(accelerator: Accelerator) -> dict:
         wandb_config = {}
 
     wandb_config = broadcast_object_list([wandb_config], from_process=0).pop()
+    assert isinstance(wandb_config, dict)
     return wandb_config
 
 
@@ -197,22 +165,18 @@ def main():
         # Define a tiny configuration
         tiny_config = Qwen2ParScaleConfig(
             vocab_size=tokenizer.vocab_size,
-            hidden_size=256,
-            intermediate_size=512,
-            num_hidden_layers=12,
-            num_attention_heads=32,
-            num_key_value_heads=16,
-            max_position_embeddings=10000,
-            parscale_n=config.parscale.parscale_n,
-            parscale_n_tokens=config.parscale.parscale_n_tokens,
-            enable_cross_attn=config.parscale.enable_cross_attn,
-            parscale_cross_attn_layers=config.parscale.parscale_cross_attn_layers,
-            enable_replica_rope=config.parscale.enable_replica_rope,
+            **asdict(config.model),
+            **asdict(config.parscale),
         )
         model = Qwen2ParScaleForCausalLM(tiny_config).to(torch.bfloat16)
         dataset = proc_dataset("debug")
     else:
-        model = convert_qwen2_to_parscale(config.training.base_model, config.parscale)
+        config = mk_model_config(
+            config.training.base_model,
+            model_config=config.model,
+            parscale_config=config.parscale,
+        )
+        model = convert_qwen2_to_parscale(config.training.base_model, config)
         dataset = proc_dataset(config.training.dataset)
 
     def collate_fn(features):
@@ -227,35 +191,21 @@ def main():
         batch["labels"] = batch["input_ids"].clone()
         return batch
 
-    fsdp_config = {
-        "fsdp_activation_checkpointing": True,
-        "fsdp_auto_wrap_policy": "TRANSFORMER_BASED_WRAP",
-        "fsdp_cpu_ram_efficient_loading": True,
-        "fsdp_offload_params": False,
-        "fsdp_reshard_after_forward": True,
-        "fsdp_state_dict_type": "SHARDED_STATE_DICT",
-        "fsdp_transformer_layer_cls_to_wrap": "Qwen2DecoderLayer",
-    }
-
     training_args = TrainingArguments(
-        output_dir=config.training.output_dir,
-        max_steps=config.training.max_steps,
-        per_device_train_batch_size=config.training.per_device_train_batch_size,
-        gradient_accumulation_steps=config.training.gradient_accumulation_steps,
-        learning_rate=config.training.learning_rate,
-        warmup_steps=config.training.warmup_steps,
-        logging_steps=config.training.logging_steps,
-        save_steps=config.training.save_steps,
-        save_total_limit=config.training.save_total_limit,
-        bf16=torch.cuda.is_available(),
-        remove_unused_columns=False,
+        **asdict(config.training),
         report_to="wandb" if accelerator.is_main_process else "none",
-        # Learning rate schedule - constant with warmup like paper's stage 2
-        lr_scheduler_type="constant_with_warmup",
         # Multi-GPU setup
         ddp_find_unused_parameters=False,
         fsdp="full_shard",
-        fsdp_config=fsdp_config,
+        fsdp_config={
+            "fsdp_activation_checkpointing": True,
+            "fsdp_auto_wrap_policy": "TRANSFORMER_BASED_WRAP",
+            "fsdp_cpu_ram_efficient_loading": True,
+            "fsdp_offload_params": False,
+            "fsdp_reshard_after_forward": True,
+            "fsdp_state_dict_type": "SHARDED_STATE_DICT",
+            "fsdp_transformer_layer_cls_to_wrap": "Qwen2DecoderLayer",
+        },
     )
 
     trainer = Trainer(
