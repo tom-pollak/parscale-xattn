@@ -1,14 +1,16 @@
-"""Qwen2 model configuration, with support for ParScale"""
+"""Qwen2 model configuration, with support for ParScale and cross-attention extensions"""
 
 from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_rope_utils import rope_config_validation
 from transformers.utils import logging
 
+# Import the new configuration hierarchy
+from .config_cross_attn import ParScaleCrossAttnConfig
 
 logger = logging.get_logger(__name__)
 
 
-class Qwen2ParScaleConfig(PretrainedConfig):
+class Qwen2ParScaleConfig(ParScaleCrossAttnConfig):
     r"""
     This is the configuration class to store the configuration of a [`Qwen2Model`]. It is used to instantiate a
     Qwen2 model according to the specified arguments, defining the model architecture. Instantiating a configuration
@@ -130,156 +132,12 @@ class Qwen2ParScaleConfig(PretrainedConfig):
     ```"""
 
     model_type = "qwen2_parscale"
-    keys_to_ignore_at_inference = ["past_key_values"]
 
-    # Default tensor parallel plan for base model `Qwen2`
-    base_model_tp_plan = {
-        "layers.*.self_attn.q_proj": "colwise",
-        "layers.*.self_attn.k_proj": "colwise",
-        "layers.*.self_attn.v_proj": "colwise",
-        "layers.*.self_attn.o_proj": "rowwise",
-        "layers.*.mlp.gate_proj": "colwise",
-        "layers.*.mlp.up_proj": "colwise",
-        "layers.*.mlp.down_proj": "rowwise",
-    }
+    def __init__(self, **kwargs):
+        """
+        Qwen2ParScaleConfig now inherits from ParScaleCrossAttnConfig, providing
+        both base ParScale functionality and cross-attention extensions.
 
-    def __init__(
-        self,
-        vocab_size=151936,
-        hidden_size=4096,
-        intermediate_size=22016,
-        num_hidden_layers=32,
-        num_attention_heads=32,
-        num_key_value_heads=32,
-        hidden_act="silu",
-        max_position_embeddings=32768,
-        initializer_range=0.02,
-        rms_norm_eps=1e-6,
-        use_cache=True,
-        tie_word_embeddings=False,
-        rope_theta=10000.0,
-        rope_scaling=None,
-        use_sliding_window=False,
-        sliding_window=4096,
-        max_window_layers=28,
-        attention_dropout=0.0,
-        parscale_n=1,
-        parscale_n_tokens=48,
-        parscale_attn_smooth=0.01,
-        enable_cross_attn=False,
-        parscale_cross_attn_layers=None,
-        enable_replica_rope=False,
-        **kwargs,
-    ):
-        self.vocab_size = vocab_size
-        self.max_position_embeddings = max_position_embeddings
-        self.hidden_size = hidden_size
-        self.intermediate_size = intermediate_size
-        self.num_hidden_layers = num_hidden_layers
-        self.num_attention_heads = num_attention_heads
-        self.use_sliding_window = use_sliding_window
-        self.sliding_window = sliding_window if use_sliding_window else None
-        self.max_window_layers = max_window_layers
-        self.parscale_n = parscale_n
-        self.parscale_n_tokens = parscale_n_tokens
-        self.parscale_attn_smooth = parscale_attn_smooth
-        self.enable_cross_attn = enable_cross_attn
-        self.parscale_cross_attn_layers = parscale_cross_attn_layers
-        self.enable_replica_rope = enable_replica_rope
-
-        # for backward compatibility
-        if num_key_value_heads is None:
-            num_key_value_heads = num_attention_heads
-
-        self.num_key_value_heads = num_key_value_heads
-        self.hidden_act = hidden_act
-        self.initializer_range = initializer_range
-        self.rms_norm_eps = rms_norm_eps
-        self.use_cache = use_cache
-        self.rope_theta = rope_theta
-        self.rope_scaling = rope_scaling
-        self.attention_dropout = attention_dropout
-        # Validate the correctness of rotary position embeddings parameters
-        # BC: if there is a 'type' field, move it to 'rope_type'.
-        if self.rope_scaling is not None and "type" in self.rope_scaling:
-            self.rope_scaling["rope_type"] = self.rope_scaling["type"]
-        rope_config_validation(self)
-
-        self._validate_parscale_config()
-
-        super().__init__(
-            tie_word_embeddings=tie_word_embeddings,
-            **kwargs,
-        )
-
-    def _validate_parscale_config(self):
-        """Validate ParScale-specific configuration parameters."""
-        # Basic bounds checking
-        if self.parscale_n < 1:
-            raise ValueError(f"parscale_n must be >= 1, got {self.parscale_n}")
-
-        if self.parscale_n_tokens < 0:
-            raise ValueError(
-                f"parscale_n_tokens must be >= 0, got {self.parscale_n_tokens}"
-            )
-
-        # Cross-attention validation
-        if self.enable_cross_attn and self.parscale_n == 1:
-            raise ValueError(
-                "Cross-attention (enable_cross_attn=True) requires parscale_n > 1, "
-                f"but got parscale_n={self.parscale_n}. Either disable cross-attention "
-                "or increase parscale_n."
-            )
-
-        # When parscale_n=1, enforce standard Qwen2 behavior
-        if self.parscale_n == 1:
-            if self.enable_cross_attn:
-                raise ValueError(
-                    f"Cross-attention should be disabled when parscale_n=1, "
-                    f"but enable_cross_attn={self.enable_cross_attn}"
-                )
-            if self.parscale_n_tokens > 0:
-                raise ValueError(
-                    f"Prefix tokens should be 0 when parscale_n=1 (standard Qwen2 mode), "
-                    f"but parscale_n_tokens={self.parscale_n_tokens}"
-                )
-
-        # Cross-attention layers validation
-        if self.parscale_cross_attn_layers is not None:
-            if not self.enable_cross_attn:
-                raise ValueError(
-                    "parscale_cross_attn_layers is specified but enable_cross_attn=False. "
-                    "Either enable cross-attention or set parscale_cross_attn_layers=None."
-                )
-
-            if not isinstance(self.parscale_cross_attn_layers, (list, tuple)):
-                raise ValueError(
-                    f"parscale_cross_attn_layers must be a list or tuple, "
-                    f"got {type(self.parscale_cross_attn_layers)}"
-                )
-
-            # Check layer indices are valid
-            for layer_idx in self.parscale_cross_attn_layers:
-                if not isinstance(layer_idx, int) or layer_idx < 0:
-                    raise ValueError(
-                        f"All layer indices in parscale_cross_attn_layers must be non-negative integers, "
-                        f"got {layer_idx}"
-                    )
-                if layer_idx >= self.num_hidden_layers:
-                    raise ValueError(
-                        f"Layer index {layer_idx} in parscale_cross_attn_layers is >= num_hidden_layers "
-                        f"({self.num_hidden_layers})"
-                    )
-
-        # Replica RoPE validation
-        if self.enable_replica_rope and not self.enable_cross_attn:
-            raise ValueError(
-                "Replica RoPE (enable_replica_rope=True) requires cross-attention to be enabled "
-                "(enable_cross_attn=True), but enable_cross_attn=False."
-            )
-
-        if self.enable_replica_rope and self.parscale_n == 1:
-            raise ValueError(
-                "Replica RoPE (enable_replica_rope=True) requires parscale_n > 1, "
-                f"but got parscale_n={self.parscale_n}."
-            )
+        This maintains backward compatibility while enabling the new cross-attention features.
+        """
+        super().__init__(**kwargs)
