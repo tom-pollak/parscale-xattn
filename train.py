@@ -19,21 +19,18 @@ from transformers import (
 )
 
 from parscale_xattn import (
-    Qwen2ParScaleConfig,
     Qwen2ParScaleForCausalLM,
     Qwen2ParScaleConfig,
-    Qwen2ParScaleForCausalLM,
 )
 
 
-@dataclass
-class ModelConfig:
-    hidden_size: int = 256
-    intermediate_size: int = 512
-    num_hidden_layers: int = 12
-    num_attention_heads: int = 32
-    num_key_value_heads: int = 16
-    max_position_embeddings: int = 10000
+DEBUG_CONFIG = Qwen2ParScaleConfig(
+    hidden_size=256,
+    intermediate_size=512,
+    num_hidden_layers=12,
+    num_attention_heads=32,
+    num_key_value_heads=16,
+)
 
 
 @dataclass
@@ -47,7 +44,7 @@ class ParScaleConfig:
 
 @dataclass
 class TrainingConfig:
-    base_model: str = "Qwen/Qwen2-0.5B"
+    model_name: str = "Qwen/Qwen2-0.5B"
     dataset: str = "pajama"
     output_dir: str = "./parscale-model"
     max_length: int = 2048
@@ -67,32 +64,36 @@ class TrainingConfig:
 
 @dataclass
 class Config:
-    model: ModelConfig = field(default_factory=ModelConfig)
     parscale: ParScaleConfig = field(default_factory=ParScaleConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
 
 
 def mk_model_config(
-    base_model_name: str, model_config: ModelConfig, parscale_config: ParScaleConfig
+    model_name: str,
+    parscale_config: ParScaleConfig,
 ) -> Qwen2ParScaleConfig:
-    base_config = AutoConfig.from_pretrained(base_model_name)
+    if model_name == "debug":
+        model_config = DEBUG_CONFIG
+    else:
+        model_config = AutoConfig.from_pretrained(model_name)
+
     return Qwen2ParScaleConfig(
-        **base_config.to_dict(),
+        **model_config.to_dict(),
         **asdict(parscale_config),
-        **asdict(model_config),
     )
 
 
-def convert_qwen2_to_parscale(
-    base_model_name: str,
+def mk_model(
+    model_name: str,
     config: Qwen2ParScaleConfig,
+    dtype: torch.dtype = torch.bfloat16,
 ) -> Qwen2ParScaleForCausalLM:
     """Convert Qwen2 model to ParScale."""
-    base_model = AutoModelForCausalLM.from_pretrained(
-        base_model_name,
-        torch_dtype=torch.bfloat16,
-    )
-    parscale_model = Qwen2ParScaleForCausalLM(config).to(torch.bfloat16)
+    parscale_model = Qwen2ParScaleForCausalLM(config).to(dtype)  # type: ignore
+    if model_name == "debug":
+        return parscale_model
+
+    base_model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=dtype)
     parscale_model.load_state_dict(base_model.state_dict(), strict=False)
     return parscale_model
 
@@ -175,24 +176,17 @@ def main():
     wandb_config = init_wandb(accelerator)
     config = mk_config(wandb_config)
 
-    tokenizer = AutoTokenizer.from_pretrained(config.training.base_model)
+    tokenizer = AutoTokenizer.from_pretrained(config.training.model_name)
+
     if config.training.debug:
-        # Define a tiny configuration
-        tiny_config = Qwen2ParScaleConfig(
-            vocab_size=tokenizer.vocab_size,
-            **asdict(config.model),
-            **asdict(config.parscale),
-        )
-        model = Qwen2ParScaleForCausalLM(tiny_config).to(torch.bfloat16)
-        dataset = proc_dataset("debug")
+        model_name = dataset_name = "debug"
     else:
-        config = mk_model_config(
-            config.training.base_model,
-            model_config=config.model,
-            parscale_config=config.parscale,
-        )
-        model = convert_qwen2_to_parscale(config.training.base_model, config)
-        dataset = proc_dataset(config.training.dataset)
+        model_name = config.training.model_name
+        dataset_name = config.training.dataset
+
+    dataset = proc_dataset(dataset_name)
+    config = mk_model_config(model_name, config.parscale)
+    model = mk_model(model_name, config)
 
     def collate_fn(features):
         texts = [f["text"] for f in features]
@@ -219,7 +213,10 @@ def main():
             "fsdp_offload_params": False,
             "fsdp_reshard_after_forward": True,
             "fsdp_state_dict_type": "SHARDED_STATE_DICT",
-            "fsdp_transformer_layer_cls_to_wrap": "Qwen2DecoderLayer",
+            "fsdp_transformer_layer_cls_to_wrap": [
+                "Qwen2DecoderLayer",
+                "ParScaleCrossAttnDecoderLayer",
+            ],
         },
     )
 
