@@ -2,6 +2,7 @@
 
 import sys
 from pathlib import Path
+import copy
 
 import pytest
 import torch
@@ -319,11 +320,11 @@ class TestAggregationMathematicalProperties:
         """Test that aggregation is deterministic for same inputs."""
         # Set seeds for reproducibility
         torch.manual_seed(42)
-        model1 = ParScaleCrossAttnModel(small_config)
+        model1 = ParScaleCrossAttnModel(copy.deepcopy(small_config))
         model1.eval()
 
         torch.manual_seed(42)
-        model2 = ParScaleCrossAttnModel(small_config)
+        model2 = ParScaleCrossAttnModel(copy.deepcopy(small_config))
         model2.eval()
 
         # Same input
