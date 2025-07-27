@@ -22,15 +22,25 @@ from parscale_xattn.modeling_base import Qwen2Attention
 class TestAPICompatibility:
     """Test that the API remains compatible with existing code."""
 
-    def test_original_class_names_available(self):
+    @pytest.fixture(scope="class")
+    def small_config(self):
+        """A small, fast configuration for testing."""
+        return Qwen2ParScaleConfig(
+            hidden_size=16,
+            num_hidden_layers=2,
+            intermediate_size=32,
+            num_attention_heads=4,
+            vocab_size=100,
+        )
+
+    def test_original_class_names_available(self, small_config):
         """Test that original class names are still available as aliases."""
         # These should all be importable and work
-        config = Qwen2ParScaleConfig(parscale_n=1)
-        model = Qwen2ParScaleForCausalLM(config)
+        model = Qwen2ParScaleForCausalLM(small_config)
 
         # Original aliases should work
-        qwen2_model = Qwen2Model(config)
-        qwen2_causal = Qwen2ForCausalLM(config)
+        qwen2_model = Qwen2Model(small_config)
+        qwen2_causal = Qwen2ForCausalLM(small_config)
 
         # Should be the same underlying classes
         assert type(model.model) == type(qwen2_model)
@@ -61,10 +71,9 @@ class TestAPICompatibility:
         assert config.enable_replica_rope == True
         assert config.parscale_attn_smooth == 0.05
 
-    def test_model_methods_available(self):
+    def test_model_methods_available(self, small_config):
         """Test that all expected model methods are available."""
-        config = Qwen2ParScaleConfig(hidden_size=64, num_hidden_layers=1)
-        model = Qwen2ParScaleForCausalLM(config)
+        model = Qwen2ParScaleForCausalLM(small_config)
 
         # Standard transformers methods
         assert hasattr(model, "forward")
@@ -79,16 +88,13 @@ class TestAPICompatibility:
         assert hasattr(model, "model")
         assert hasattr(model, "lm_head")
 
-    def test_forward_signature_compatibility(self):
+    def test_forward_signature_compatibility(self, small_config):
         """Test that forward method signature is compatible."""
-        config = Qwen2ParScaleConfig(
-            hidden_size=64, num_hidden_layers=1, vocab_size=100
-        )
-        model = Qwen2ParScaleForCausalLM(config)
+        model = Qwen2ParScaleForCausalLM(small_config)
 
         batch_size = 2
         seq_len = 5
-        input_ids = torch.randint(0, config.vocab_size, (batch_size, seq_len))
+        input_ids = torch.randint(0, small_config.vocab_size, (batch_size, seq_len))
 
         # Should work with standard transformers arguments
         output = model(
