@@ -8,6 +8,7 @@ from typing import Optional, Tuple, Union, List
 
 import torch
 from torch import nn
+from einops import repeat
 from transformers.cache_utils import Cache
 from transformers.modeling_flash_attention_utils import FlashAttentionKwargs
 from transformers.modeling_outputs import (

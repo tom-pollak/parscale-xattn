@@ -56,7 +56,7 @@ class ParScaleBaseConfig(PretrainedConfig):
             The dropout ratio for the attention probabilities.
         parscale_n (`int`, *optional*, defaults to 1):
             Number of parallel replicas for ParScale. When set to 1, behaves as standard Qwen2.
-        parscale_n_tokens (`int`, *optional*, defaults to 48):
+        parscale_n_tokens (`int`, *optional*, defaults to 0):
             Number of prefix tokens for cross-replica communication via prefix tokens.
         parscale_attn_smooth (`float`, *optional*, defaults to 0.01):
             Attention smoothing parameter for output aggregation across replicas.
@@ -97,7 +97,7 @@ class ParScaleBaseConfig(PretrainedConfig):
         max_window_layers=28,
         attention_dropout=0.0,
         parscale_n=1,
-        parscale_n_tokens=48,
+        parscale_n_tokens=0,
         parscale_attn_smooth=0.01,
         **kwargs,
     ):
