@@ -214,9 +214,22 @@ class ParScaleCrossAttnModel(ParScaleBaseModel):
                     from .modeling_base import ParscaleCache
 
                     past_key_values = ParscaleCache(
-                        [layer.self_attn.prefix_k for layer in self.layers],
-                        [layer.self_attn.prefix_v for layer in self.layers],
+                        self.config,
+                        inputs_embeds.shape[0] // self.config.parscale_n,
+                        dtype=inputs_embeds.dtype,
+                        device=inputs_embeds.device,
                     )
+                    for layer_idx in range(self.config.num_hidden_layers):
+                        past_key_values.key_cache[layer_idx] = self.layers[
+                            layer_idx
+                        ].self_attn.prefix_k.repeat(
+                            inputs_embeds.shape[0] // self.config.parscale_n, 1, 1, 1
+                        )
+                        past_key_values.value_cache[layer_idx] = self.layers[
+                            layer_idx
+                        ].self.attn.prefix_v.repeat(
+                            inputs_embeds.shape[0] // self.config.parscale_n, 1, 1, 1
+                        )
 
         # Standard Hugging Face cache initialization
         if use_cache and past_key_values is None:
