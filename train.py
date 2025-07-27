@@ -12,7 +12,6 @@ from pydantic import TypeAdapter
 from pydantic.dataclasses import dataclass
 from transformers import (
     AutoConfig,
-    AutoModelForCausalLM,
     AutoTokenizer,
     Trainer,
     TrainingArguments,
