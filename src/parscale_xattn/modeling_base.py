@@ -296,7 +296,7 @@ class Qwen2Attention(nn.Module):
 
         if self.config.parscale_n > 1 and query_states.size(2) != 1:
             # Remove the prefix part
-            attn_output = attn_output[:, n_virtual_tokens:]
+            attn_output = attn_output[:, n_prefix_tokens:]
         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
         attn_output = self.o_proj(attn_output)
         return attn_output, attn_weights
