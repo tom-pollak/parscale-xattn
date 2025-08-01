@@ -197,15 +197,17 @@ def init_wandb(accelerator: Accelerator) -> dict:
     shared_object = [None]
     if accelerator.is_main_process:
         wandb.init(project=os.environ.get("WANDB_PROJECT", "parscale-xattn"))
-        shared_object[0] = OmegaConf.from_dotlist(
+        wandb_config = OmegaConf.from_dotlist(
             [f"{k}={v}" for k, v in dict(wandb.config).items()]
         )
+        shared_object[0] = wandb_config
+        wandb.log({"wandb_config": dict(wandb_config)})
 
     wandb_config = broadcast_object_list(shared_object, from_process=0).pop()
     return wandb_config
 
 
-def mk_config(wandb_config) -> Config:
+def mk_config(accelerator: Accelerator, wandb_config) -> Config:
     base_config: Config = OmegaConf.structured(Config)
     yaml_config = (
         OmegaConf.load(config_file)
@@ -224,13 +226,15 @@ def mk_config(wandb_config) -> Config:
     ## Validate Pydantic
     config = OmegaConf.to_container(config, structured_config_mode=SCMode.DICT)
     config = TypeAdapter(Config).validate_python(config)
+    if accelerator.is_main_process:
+        wandb.log({"config": dict(asdict(config))})
     return config
 
 
 def main():
     accelerator = Accelerator()
     wandb_config = init_wandb(accelerator)
-    config = mk_config(wandb_config)
+    config = mk_config(accelerator, wandb_config)
 
     tokenizer = AutoTokenizer.from_pretrained(config.training.model_name)
 
