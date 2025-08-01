@@ -68,6 +68,7 @@ SWEEP_CONFIGS = {
             "parscale.parscale_n_tokens": {"value": 0},
             "parscale.parscale_n": {"values": [2, 4, 8]},
             "parscale.enable_cross_attn": {"value": True},
+            "parscale.enable_replica_rope": {"value": True},
         },
     },
     # 4. Same but cross-attention on preset layers
@@ -79,6 +80,7 @@ SWEEP_CONFIGS = {
             "parscale.parscale_n_tokens": {"value": 0},
             "parscale.parscale_n": {"values": [2, 4, 8]},
             "parscale.enable_cross_attn": {"value": True},
+            "parscale.enable_replica_rope": {"value": True},
             "parscale.parscale_cross_attn_layers": {
                 "value": [0, 6, 12, 18]
             },  # Early, mid, late layers
