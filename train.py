@@ -143,7 +143,6 @@ def init_wandb(accelerator: Accelerator) -> dict:
         )
 
     wandb_config = broadcast_object_list(shared_object, from_process=0).pop()
-    assert isinstance(wandb_config, dict)
     return wandb_config
 
 
