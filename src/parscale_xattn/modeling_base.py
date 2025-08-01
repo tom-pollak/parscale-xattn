@@ -243,7 +243,6 @@ class Qwen2Attention(nn.Module):
             # Expand attention mask to contain the prefix tokens
             n_virtual_tokens = self.config.parscale_n_tokens
             if attention_mask is not None:
-                print(f"[DEBUG Qwen2Attention] Before first expansion - attention_mask shape: {attention_mask.shape}")
                 attention_mask = torch.cat(
                     [
                         torch.zeros(
@@ -296,7 +295,6 @@ class Qwen2Attention(nn.Module):
                         ],
                         dim=2,
                     )
-                    print(f"[DEBUG Qwen2Attention] After second expansion - attention_mask shape: {attention_mask.shape}")
 
         sliding_window = None
         if (

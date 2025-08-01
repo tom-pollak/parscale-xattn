@@ -40,6 +40,7 @@ class ParScaleConfig:
     enable_cross_attn: bool = False
     parscale_cross_attn_layers: Optional[list[int]] = None
     enable_replica_rope: bool = False
+    use_cache: bool = False
 
 
 @dataclass
@@ -48,14 +49,14 @@ class TrainingConfig:
     dataset: str = "pajama"
     output_dir: str = "./parscale-model"
     max_length: int = 2048
-    per_device_train_batch_size: int = 1
-    gradient_accumulation_steps: int = 1
+    per_device_train_batch_size: int = 8
+    gradient_accumulation_steps: int = 2
     max_steps: int = 76294  # 20B tokens ÷ (4×4×2048×8) ≈ 76k steps from paper
     learning_rate: float = 3e-4  # Stage 2 learning rate from paper
     warmup_steps: int = 2000  # 2K warm-up from paper
     save_steps: int = 76294  # Save only at the end
     save_total_limit: int = 1  # Keep only final checkpoint
-    logging_steps: int = 1000  # Log every 1000 steps for long training
+    logging_steps: int = 25
     seed: int = 42
     lr_scheduler_type: str = "constant_with_warmup"
     bf16: bool = field(default_factory=torch.cuda.is_available)
@@ -82,8 +83,10 @@ def mk_model_config(
         model_config = AutoConfig.from_pretrained(model_name)
 
     return Qwen2ParScaleConfig(
-        **model_config.to_dict(),
-        **asdict(parscale_config),
+        **{
+            **model_config.to_dict(),
+            **asdict(parscale_config),
+        }
     )
 
 
@@ -213,7 +216,7 @@ def main():
             "fsdp_auto_wrap_policy": "TRANSFORMER_BASED_WRAP",
             "fsdp_cpu_ram_efficient_loading": True,
             "fsdp_offload_params": False,
-            "fsdp_reshard_after_forward": True,
+            "fsdp_reshard_after_forward": False,
             "fsdp_state_dict_type": "SHARDED_STATE_DICT",
             "fsdp_transformer_layer_cls_to_wrap": [
                 "Qwen2DecoderLayer",
