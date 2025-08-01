@@ -201,7 +201,9 @@ def init_wandb(accelerator: Accelerator) -> dict:
             [f"{k}={v}" for k, v in dict(wandb.config).items()]
         )
         shared_object[0] = wandb_config
-        wandb.summary["wandb_config"] = dict(wandb_config)
+        wandb.summary["wandb_config"] = OmegaConf.to_container(
+            wandb_config, resolve=True
+        )
 
     wandb_config = broadcast_object_list(shared_object, from_process=0).pop()
     return wandb_config
