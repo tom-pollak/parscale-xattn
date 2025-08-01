@@ -156,11 +156,3 @@ class ParScaleBaseConfig(PretrainedConfig):
             raise ValueError(
                 f"parscale_n_tokens must be >= 0, got {self.parscale_n_tokens}"
             )
-
-        # When parscale_n=1, enforce standard Qwen2 behavior
-        if self.parscale_n == 1:
-            if self.parscale_n_tokens > 0:
-                raise ValueError(
-                    f"Prefix tokens should be 0 when parscale_n=1 (standard Qwen2 mode), "
-                    f"but parscale_n_tokens={self.parscale_n_tokens}"
-                )
