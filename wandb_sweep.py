@@ -15,11 +15,12 @@ BASE_CONFIG = {
         "name": "train/loss",
         "goal": "minimize",
     },
-    "parameters": {
-        "training.save_total_limit": {"value": 0},
-        "training.warmup_steps": {"value": 500},
-        "training.max_steps": {"value": 5000},
-    },
+}
+
+BASE_PARAMS = {
+    "training.save_total_limit": {"value": 0},
+    "training.warmup_steps": {"value": 500},
+    "training.max_steps": {"value": 5000},
 }
 
 SWEEP_CONFIGS = {
@@ -93,7 +94,9 @@ def main():
         print(f"Available sweeps: {list(SWEEP_CONFIGS.keys())}")
         return None
 
-    config = {**BASE_CONFIG, **SWEEP_CONFIGS[sweep_name]}
+    sweep_config = SWEEP_CONFIGS[sweep_name]
+    sweep_config["parameters"] = {**BASE_PARAMS, **sweep_config["parameters"]}
+    config = {**BASE_CONFIG, **sweep_config}
     sweep_id = wandb.sweep(config, project=PROJECT_NAME)
     print("Run with:\n", f"uv run wandb agent graphcore/{PROJECT_NAME}/{sweep_id}")
 
