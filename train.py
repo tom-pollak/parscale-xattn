@@ -49,8 +49,8 @@ class TrainingConfig:
     dataset: str = "pajama"
     output_dir: str = "./models/"
     max_length: int = 2048
-    per_device_train_batch_size: int = 16
-    gradient_accumulation_steps: int = 1
+    per_device_train_batch_size: int = 8
+    gradient_accumulation_steps: int = 2
     max_steps: int = 76294  # 20B tokens ÷ (4×4×2048×8) ≈ 76k steps from paper
     learning_rate: float = 3e-4  # Stage 2 learning rate from paper
     warmup_steps: int = 2000  # 2K warm-up from paper
@@ -105,14 +105,14 @@ def freeze_pretrained_weights(
     - prefix_k, prefix_v (prefix cache parameters)
     - aggregate_layer (aggregation MLP)
     - CrossReplicaAttention modules (cross-attention components)
-    
+
     When parscale_n=1, this effectively disables freezing since there are no
     ParScale-specific parameters to unfreeze.
     """
     # If parscale_n=1, don't freeze anything since there are no ParScale parameters
     if config.parscale_n == 1:
         return
-    
+
     # First freeze all parameters
     for param in model.parameters():
         param.requires_grad = False
