@@ -15,6 +15,11 @@ BASE_CONFIG = {
         "name": "train/loss",
         "goal": "minimize",
     },
+    "parameters": {
+        "training.save_total_limit": {"value": 0},
+        "training.warmup_steps": {"value": 500},
+        "training.max_steps": {"value": 5000},
+    },
 }
 
 SWEEP_CONFIGS = {
@@ -24,13 +29,10 @@ SWEEP_CONFIGS = {
         "description": "Verify 3e-4 learning rate with P=1 and P=4",
         "method": "grid",
         "parameters": {
-            "training.save_total_limit": {"value": 0},
+            "parscale.parscale_n_tokens": {"value": 48},
             "parscale.parscale_n": {"value": 1},
-            "parscale.parscale_n_tokens": {"value": 0},
             "parscale.enable_cross_attn": {"value": False},
             "training.learning_rate": {"values": [1e-4, 3e-4, 5e-4, 1e-3]},
-            "training.warmup_steps": {"value": 500},
-            "training.max_steps": {"value": 5000},
         },
     },
     # 1b. Verify with 4/8 P
@@ -39,11 +41,9 @@ SWEEP_CONFIGS = {
         "description": "Verify 3e-4 learning rate with P=1 and P=4",
         "method": "grid",
         "parameters": {
-            "training.save_total_limit": {"value": 0},
             "parscale.parscale_n": {"values": [4, 8]},
             "parscale.enable_cross_attn": {"value": False},
             "training.learning_rate": {"values": [1e-4, 3e-4, 5e-4, 1e-3]},
-            "training.max_steps": {"value": 7500},
         },
     },
     # 2. Fixed LR, sweep over P values (original paper replication)
@@ -52,7 +52,6 @@ SWEEP_CONFIGS = {
         "description": "Original paper replication: P=1,2,4,8 with fixed LR",
         "method": "grid",
         "parameters": {
-            "training.save_total_limit": {"value": 0},
             "parscale.parscale_n": {"values": [2, 4, 8]},
             "parscale.enable_cross_attn": {"value": False},
         },
@@ -63,7 +62,6 @@ SWEEP_CONFIGS = {
         "description": "Cross-attention on all layers with P=1,2,4,8",
         "method": "grid",
         "parameters": {
-            "training.save_total_limit": {"value": 0},
             "parscale.parscale_n": {"values": [2, 4, 8]},
             "parscale.enable_cross_attn": {"value": True},
         },
@@ -74,7 +72,6 @@ SWEEP_CONFIGS = {
         "description": "Cross-attention on preset layers with P=1,2,4,8",
         "method": "grid",
         "parameters": {
-            "training.save_total_limit": {"value": 0},
             "parscale.parscale_n": {"values": [2, 4, 8]},
             "parscale.enable_cross_attn": {"value": True},
             "parscale.parscale_cross_attn_layers": {
