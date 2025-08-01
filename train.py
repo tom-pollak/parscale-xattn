@@ -47,7 +47,7 @@ class ParScaleConfig:
 class TrainingConfig:
     model_name: str = "Qwen/Qwen2-0.5B"
     dataset: str = "pajama"
-    output_dir: str = "./parscale-model"
+    output_dir: str = "./models/"
     max_length: int = 2048
     per_device_train_batch_size: int = 16
     gradient_accumulation_steps: int = 1
@@ -105,11 +105,19 @@ def freeze_pretrained_weights(
     - prefix_k, prefix_v (prefix cache parameters)
     - aggregate_layer (aggregation MLP)
     - CrossReplicaAttention modules (cross-attention components)
+    
+    When parscale_n=1, this effectively disables freezing since there are no
+    ParScale-specific parameters to unfreeze.
     """
+    # If parscale_n=1, don't freeze anything since there are no ParScale parameters
+    if config.parscale_n == 1:
+        return
+    
     # First freeze all parameters
     for param in model.parameters():
         param.requires_grad = False
 
+    # Unfreeze prefix parameters (these exist when parscale_n_tokens > 0)
     for layer in model.model.layers:
         if hasattr(layer.self_attn, "prefix_k"):
             layer.self_attn.prefix_k.requires_grad = True
@@ -119,8 +127,9 @@ def freeze_pretrained_weights(
     # Unfreeze ParScale-specific components
     if config.parscale_n > 1:
         # Unfreeze aggregation layer if it exists
-        for param in model.model.aggregate_layer.parameters():
-            param.requires_grad = True
+        if hasattr(model.model, "aggregate_layer"):
+            for param in model.model.aggregate_layer.parameters():
+                param.requires_grad = True
 
         # Unfreeze cross-attention components
         if config.enable_cross_attn:
