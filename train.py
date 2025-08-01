@@ -210,19 +210,19 @@ def main():
         remove_unused_columns=False,
         # Multi-GPU setup
         ddp_find_unused_parameters=False,
-        fsdp="full_shard",
-        fsdp_config={
-            "fsdp_activation_checkpointing": False,
-            "fsdp_auto_wrap_policy": "TRANSFORMER_BASED_WRAP",
-            "fsdp_cpu_ram_efficient_loading": True,
-            "fsdp_offload_params": False,
-            "fsdp_reshard_after_forward": False,
-            "fsdp_state_dict_type": "SHARDED_STATE_DICT",
-            "fsdp_transformer_layer_cls_to_wrap": [
-                "Qwen2DecoderLayer",
-                "ParScaleCrossAttnDecoderLayer",
-            ],
-        },
+        # fsdp="no_shard",
+        # fsdp_config={
+        #     "fsdp_activation_checkpointing": False,
+        #     "fsdp_auto_wrap_policy": "TRANSFORMER_BASED_WRAP",
+        #     "fsdp_cpu_ram_efficient_loading": False,
+        #     "fsdp_offload_params": False,
+        #     "fsdp_reshard_after_forward": False,
+        #     "fsdp_state_dict_type": "SHARDED_STATE_DICT",
+        #     "fsdp_transformer_layer_cls_to_wrap": [
+        #         "Qwen2DecoderLayer",
+        #         "ParScaleCrossAttnDecoderLayer",
+        #     ],
+        # },
     )
 
     trainer = Trainer(
