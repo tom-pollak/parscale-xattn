@@ -28,19 +28,19 @@ CONFIG_FILE=configs/cross_attn.yaml uv run accelerate launch train.py --parscale
 #### Multi-GPU (8 GPUs with FSDP)
 ```bash
 # Basic ParScale training with 8 GPUs
-CONFIG_FILE=configs/basic.yaml torchrun --nproc_per_node=8 train.py \
+CONFIG_FILE=configs/parscale.yaml uv run accelerate launch train.py \
   parscale.parscale_n=4 \
   training.per_device_train_batch_size=1 \
   training.gradient_accumulation_steps=16
 
 # Cross-attention with 8 GPUs
-CONFIG_FILE=configs/cross_attn.yaml torchrun --nproc_per_node=8 train.py \
+CONFIG_FILE=configs/cross_attn.yaml uv run accelerate launch train.py \
   parscale.parscale_n=4 \
   training.per_device_train_batch_size=1 \
   training.gradient_accumulation_steps=16
 
 # Larger model (Qwen2-7B) with selective cross-attention
-CONFIG_FILE=configs/cross_attn.yaml torchrun --nproc_per_node=8 train.py \
+CONFIG_FILE=configs/cross_attn.yaml uv run accelerate launch train.py \
   training.base_model=Qwen/Qwen2-7B \
   parscale.parscale_n=8 \
   parscale.parscale_cross_attn_layers=[0,4,8,12,16,20,24,28] \

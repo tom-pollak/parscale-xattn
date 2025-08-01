@@ -61,6 +61,10 @@ class TrainingConfig:
     bf16: bool = field(default_factory=torch.cuda.is_available)
     debug: bool = False
 
+    def training_arguments(self):
+        ignore_keys = {"model_name", "dataset", "max_length", "debug"}
+        return {k: v for k, v in asdict(self).items() if k not in ignore_keys}
+
 
 @dataclass
 class Config:
@@ -182,8 +186,8 @@ def main():
         dataset_name = config.training.dataset
 
     dataset = proc_dataset(dataset_name)
-    config = mk_model_config(model_name, config.parscale)
-    model = mk_model(model_name, config)
+    model_config = mk_model_config(model_name, config.parscale)
+    model = mk_model(model_name, model_config)
 
     def collate_fn(features):
         texts = [f["text"] for f in features]
@@ -198,8 +202,9 @@ def main():
         return batch
 
     training_args = TrainingArguments(
-        **asdict(config.training),
+        **config.training.training_arguments(),
         report_to="wandb" if accelerator.is_main_process else "none",
+        remove_unused_columns=False,
         # Multi-GPU setup
         ddp_find_unused_parameters=False,
         fsdp="full_shard",
