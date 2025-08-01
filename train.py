@@ -255,7 +255,7 @@ def main():
         report_to="wandb" if accelerator.is_main_process else "none",
         remove_unused_columns=False,
         # Multi-GPU setup
-        ddp_find_unused_parameters=False,
+        ddp_find_unused_parameters=True,
         # fsdp="no_shard",
         # fsdp_config={
         #     "fsdp_activation_checkpointing": False,
