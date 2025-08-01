@@ -30,8 +30,8 @@ CONFIG_FILE=configs/cross_attn.yaml uv run accelerate launch train.py --parscale
 # Basic ParScale training with 8 GPUs
 CONFIG_FILE=configs/parscale.yaml uv run accelerate launch train.py \
   parscale.parscale_n=4 \
-  training.per_device_train_batch_size=1 \
-  training.gradient_accumulation_steps=16
+  training.per_device_train_batch_size=8 \
+  training.gradient_accumulation_steps=1
 
 # Cross-attention with 8 GPUs
 CONFIG_FILE=configs/cross_attn.yaml uv run accelerate launch train.py \

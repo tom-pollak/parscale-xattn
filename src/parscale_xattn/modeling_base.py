@@ -243,25 +243,8 @@ class Qwen2Attention(nn.Module):
             # Expand attention mask to contain the prefix tokens
             n_virtual_tokens = self.config.parscale_n_tokens
 
-            if attention_mask is not None:
-                attention_mask = torch.cat(
-                    [
-                        torch.ones(
-                            (
-                                attention_mask.shape[0],
-                                attention_mask.shape[1],
-                                attention_mask.shape[2],
-                                self.config.parscale_n_tokens,
-                            ),
-                            dtype=attention_mask.dtype,
-                            device=attention_mask.device,
-                        ),
-                        attention_mask,
-                    ],
-                    dim=3,
-                )
-
             if query_states.size(2) != 1:
+                # Training/prefill mode: add prefix tokens to sequence dimension (dim=2)
                 query_states = torch.cat(
                     [
                         torch.zeros(
@@ -294,6 +277,25 @@ class Qwen2Attention(nn.Module):
                             attention_mask,
                         ],
                         dim=2,
+                    )
+            else:
+                # Generation mode: add prefix tokens to key dimension (dim=3)
+                if attention_mask is not None:
+                    attention_mask = torch.cat(
+                        [
+                            torch.ones(
+                                (
+                                    attention_mask.shape[0],
+                                    attention_mask.shape[1],
+                                    attention_mask.shape[2],
+                                    self.config.parscale_n_tokens,
+                                ),
+                                dtype=attention_mask.dtype,
+                                device=attention_mask.device,
+                            ),
+                            attention_mask,
+                        ],
+                        dim=3,
                     )
 
         sliding_window = None
