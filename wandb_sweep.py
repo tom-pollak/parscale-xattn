@@ -10,7 +10,7 @@ import wandb
 PROJECT_NAME = "parscale-xattn"
 
 BASE_CONFIG = {
-    "command": ["accelerate", "launch", "train.py"],
+    "command": ["uv", "run", "accelerate", "launch", "train.py"],
     "metric": {
         "name": "train/loss",
         "goal": "minimize",
@@ -29,7 +29,8 @@ SWEEP_CONFIGS = {
             "parscale.parscale_n_tokens": {"value": 0},
             "parscale.enable_cross_attn": {"value": False},
             "training.learning_rate": {"values": [1e-4, 3e-4, 5e-4, 1e-3]},
-            "training.max_steps": {"value": 7500},
+            "training.warmup_steps": {"value": 500},
+            "training.max_steps": {"value": 5000},
         },
     },
     # 1b. Verify with 4/8 P

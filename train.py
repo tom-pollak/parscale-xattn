@@ -49,8 +49,8 @@ class TrainingConfig:
     dataset: str = "pajama"
     output_dir: str = "./parscale-model"
     max_length: int = 2048
-    per_device_train_batch_size: int = 8
-    gradient_accumulation_steps: int = 2
+    per_device_train_batch_size: int = 16
+    gradient_accumulation_steps: int = 1
     max_steps: int = 76294  # 20B tokens ÷ (4×4×2048×8) ≈ 76k steps from paper
     learning_rate: float = 3e-4  # Stage 2 learning rate from paper
     warmup_steps: int = 2000  # 2K warm-up from paper
