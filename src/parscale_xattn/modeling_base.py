@@ -242,6 +242,24 @@ class Qwen2Attention(nn.Module):
         if self.config.parscale_n > 1:
             # Expand attention mask to contain the prefix tokens
             n_virtual_tokens = self.config.parscale_n_tokens
+            if attention_mask is not None:
+                print(f"[DEBUG Qwen2Attention] Before first expansion - attention_mask shape: {attention_mask.shape}")
+                attention_mask = torch.cat(
+                    [
+                        torch.zeros(
+                            (
+                                attention_mask.shape[0],
+                                attention_mask.shape[1],
+                                attention_mask.shape[2],
+                                self.config.parscale_n_tokens,
+                            ),
+                            dtype=attention_mask.dtype,
+                            device=attention_mask.device,
+                        ),
+                        attention_mask,
+                    ],
+                    dim=3,
+                )
 
             if query_states.size(2) != 1:
                 # Training/prefill mode: add prefix tokens to sequence dimension (dim=2)
@@ -278,25 +296,7 @@ class Qwen2Attention(nn.Module):
                         ],
                         dim=2,
                     )
-            else:
-                # Generation mode: add prefix tokens to key dimension (dim=3)
-                if attention_mask is not None:
-                    attention_mask = torch.cat(
-                        [
-                            torch.ones(
-                                (
-                                    attention_mask.shape[0],
-                                    attention_mask.shape[1],
-                                    attention_mask.shape[2],
-                                    self.config.parscale_n_tokens,
-                                ),
-                                dtype=attention_mask.dtype,
-                                device=attention_mask.device,
-                            ),
-                            attention_mask,
-                        ],
-                        dim=3,
-                    )
+                    print(f"[DEBUG Qwen2Attention] After second expansion - attention_mask shape: {attention_mask.shape}")
 
         sliding_window = None
         if (
