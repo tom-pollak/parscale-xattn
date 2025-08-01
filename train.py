@@ -60,10 +60,17 @@ class TrainingConfig:
     seed: int = 42
     lr_scheduler_type: str = "constant_with_warmup"
     bf16: bool = field(default_factory=torch.cuda.is_available)
+    freeze_pretrained: bool = True
     debug: bool = False
 
     def training_arguments(self):
-        ignore_keys = {"model_name", "dataset", "max_length", "debug"}
+        ignore_keys = {
+            "model_name",
+            "dataset",
+            "max_length",
+            "debug",
+            "freeze_pretrained",
+        }
         return {k: v for k, v in asdict(self).items() if k not in ignore_keys}
 
 
@@ -88,6 +95,42 @@ def mk_model_config(
             **asdict(parscale_config),
         }
     )
+
+
+def freeze_pretrained_weights(
+    model: Qwen2ParScaleForCausalLM, config: Qwen2ParScaleConfig
+) -> None:
+    """
+    Freeze all pretrained weights except ParScale-specific components:
+    - prefix_k, prefix_v (prefix cache parameters)
+    - aggregate_layer (aggregation MLP)
+    - CrossReplicaAttention modules (cross-attention components)
+    """
+    # First freeze all parameters
+    for param in model.parameters():
+        param.requires_grad = False
+
+    for layer in model.model.layers:
+        if hasattr(layer.self_attn, "prefix_k"):
+            layer.self_attn.prefix_k.requires_grad = True
+        if hasattr(layer.self_attn, "prefix_v"):
+            layer.self_attn.prefix_v.requires_grad = True
+
+    # Unfreeze ParScale-specific components
+    if config.parscale_n > 1:
+        # Unfreeze aggregation layer if it exists
+        for param in model.model.aggregate_layer.parameters():
+            param.requires_grad = True
+
+        # Unfreeze cross-attention components
+        if config.enable_cross_attn:
+            for layer in model.model.layers:
+                if hasattr(layer, "cross_replica_attn"):
+                    for param in layer.cross_replica_attn.parameters():
+                        param.requires_grad = True
+                if hasattr(layer, "cross_attn_norm"):
+                    for param in layer.cross_attn_norm.parameters():
+                        param.requires_grad = True
 
 
 def mk_model(
@@ -191,6 +234,9 @@ def main():
     dataset = proc_dataset(dataset_name)
     model_config = mk_model_config(model_name, config.parscale)
     model = mk_model(model_name, model_config)
+
+    if config.training.freeze_pretrained:
+        freeze_pretrained_weights(model, model_config)
 
     def collate_fn(features):
         texts = [f["text"] for f in features]
