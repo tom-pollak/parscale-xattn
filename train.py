@@ -3,6 +3,7 @@ from dataclasses import asdict, field
 from typing import Optional
 
 import torch
+import torch.distributed as dist
 import wandb
 from accelerate import Accelerator
 from accelerate.utils import broadcast_object_list
@@ -296,6 +297,7 @@ def main():
     trainer.train()
     trainer.save_model()
     tokenizer.save_pretrained(config.training.output_dir)
+    dist.destroy_process_group()
 
 
 if __name__ == "__main__":

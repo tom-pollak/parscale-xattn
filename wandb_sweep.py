@@ -54,7 +54,7 @@ SWEEP_CONFIGS = {
         "description": "Original paper replication: P=1,2,4,8 with fixed LR",
         "method": "grid",
         "parameters": {
-            "parscale.parscale_n_tokens": {"value": 0},
+            "parscale.parscale_n_tokens": {"value": 48},
             "parscale.parscale_n": {"values": [2, 4, 8]},
             "parscale.enable_cross_attn": {"value": False},
         },
@@ -65,7 +65,7 @@ SWEEP_CONFIGS = {
         "description": "Cross-attention on all layers with P=1,2,4,8",
         "method": "grid",
         "parameters": {
-            "parscale.parscale_n_tokens": {"value": 0},
+            "parscale.parscale_n_tokens": {"value": 48},
             "parscale.parscale_n": {"values": [2, 4, 8]},
             "parscale.enable_cross_attn": {"value": True},
             "parscale.enable_replica_rope": {"value": True},
@@ -77,7 +77,7 @@ SWEEP_CONFIGS = {
         "description": "Cross-attention on preset layers with P=1,2,4,8",
         "method": "grid",
         "parameters": {
-            "parscale.parscale_n_tokens": {"value": 0},
+            "parscale.parscale_n_tokens": {"value": 48},
             "parscale.parscale_n": {"values": [2, 4, 8]},
             "parscale.enable_cross_attn": {"value": True},
             "parscale.enable_replica_rope": {"value": True},
