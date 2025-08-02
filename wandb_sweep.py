@@ -26,7 +26,7 @@ BASE_PARAMS = {
 SWEEP_CONFIGS = {
     # 0. Baseline: Prefix token ablation with single replica
     "baseline_prefix_ablation": {
-        "name": "Baseline-Prefix-Token-Ablation-P1", 
+        "name": "Baseline-Prefix-Token-Ablation-P1",
         "description": "Isolate prefix token contribution with P=1 (no replicas)",
         "method": "grid",
         "parameters": {
@@ -36,26 +36,14 @@ SWEEP_CONFIGS = {
             "training.learning_rate": {"value": 3e-4},
         },
     },
-    # 1. First verify learning rate with P=1 and P=4
-    "lr_verification_1": {
-        "name": "LR-Sweep-P1",
-        "description": "Verify 3e-4 learning rate with P=1 and P=4",
-        "method": "grid",
-        "parameters": {
-            "parscale.parscale_n_tokens": {"value": 48},
-            "parscale.parscale_n": {"value": 1},
-            "parscale.enable_cross_attn": {"value": False},
-            "training.learning_rate": {"values": [1e-4, 3e-4, 5e-4, 1e-3]},
-        },
-    },
-    # 1b. Verify with 4/8 P
-    "lr_verification_48": {
+    # 1. First verify learning rate with P=1, P=4, P=8
+    "lr_verification": {
         "name": "LR-Sweep-P-4-8",
-        "description": "Verify 3e-4 learning rate with P=1 and P=4",
+        "description": "Verify 3e-4 learning rate with P=1, P=4, P=8",
         "method": "grid",
         "parameters": {
             "parscale.parscale_n_tokens": {"value": 48},
-            "parscale.parscale_n": {"values": [4, 8]},
+            "parscale.parscale_n": {"values": [1, 4, 8]},
             "parscale.enable_cross_attn": {"value": False},
             "training.learning_rate": {"values": [1e-4, 3e-4, 5e-4, 1e-3]},
         },
@@ -77,7 +65,7 @@ SWEEP_CONFIGS = {
         "description": "Cross-attention on all layers with P=1,2,4,8",
         "method": "grid",
         "parameters": {
-            "parscale.parscale_n_tokens": {"value": 48},
+            "parscale.parscale_n_tokens": {"values": [0, 48]},
             "parscale.parscale_n": {"values": [2, 4, 8]},
             "parscale.enable_cross_attn": {"value": True},
             "parscale.enable_replica_rope": {"value": True},
@@ -89,7 +77,7 @@ SWEEP_CONFIGS = {
         "description": "Cross-attention on preset layers with P=1,2,4,8",
         "method": "grid",
         "parameters": {
-            "parscale.parscale_n_tokens": {"value": 48},
+            "parscale.parscale_n_tokens": {"values": [0, 48]},
             "parscale.parscale_n": {"values": [2, 4, 8]},
             "parscale.enable_cross_attn": {"value": True},
             "parscale.enable_replica_rope": {"value": True},
