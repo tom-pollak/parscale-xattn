@@ -741,13 +741,14 @@ class ParScaleBaseModel(ParScaleBasePreTrainedModel):
                     position_ids, "b s -> (n_parscale b) s", n_parscale=self.parscale_n
                 )
 
-            # The trained prefix is saved in layer.self_attn.prefix_k / layer.self_attn.prefix_v
-            # We extract them to construct ParscaleCache.
-            if past_key_values is None or past_key_values.get_seq_length() == 0:
-                past_key_values = ParscaleCache(
-                    [layer.self_attn.prefix_k for layer in self.layers],
-                    [layer.self_attn.prefix_v for layer in self.layers],
-                )
+        # The trained prefix is saved in layer.self_attn.prefix_k / layer.self_attn.prefix_v
+        # We extract them to construct ParscaleCache when prefix tokens are enabled.
+        if (self.config.parscale_n_tokens > 0 and 
+            (past_key_values is None or past_key_values.get_seq_length() == 0)):
+            past_key_values = ParscaleCache(
+                [layer.self_attn.prefix_k for layer in self.layers],
+                [layer.self_attn.prefix_v for layer in self.layers],
+            )
 
         if use_cache and past_key_values is None:
             past_key_values = DynamicCache()
