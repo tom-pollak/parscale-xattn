@@ -253,5 +253,155 @@ class TestGenerationEquivalence:
         )
 
 
+class TestParScaleToStandardEquivalence:
+    """Test that ParScale with no prefix tokens behaves like standard Qwen2."""
+
+    def test_single_replica_no_prefix_equals_standard(self):
+        """Test that parscale_n=1, parscale_n_tokens=0 behaves like standard model."""
+        config_params = {
+            "hidden_size": 64,
+            "num_hidden_layers": 2,
+            "num_attention_heads": 4,
+            "num_key_value_heads": 2,
+            "vocab_size": 1000,
+            "max_position_embeddings": 512,
+        }
+
+        batch_size = 2
+        seq_len = 8
+        input_ids = torch.randint(0, config_params["vocab_size"], (batch_size, seq_len))
+
+        # Create standard-like ParScale model (no replicas, no prefix tokens)
+        torch.manual_seed(42)
+        standard_config = Qwen2ParScaleConfig(
+            parscale_n=1, 
+            parscale_n_tokens=0,
+            **config_params
+        )
+        standard_model = Qwen2ParScaleForCausalLM(standard_config)
+
+        # Create ground truth model with same settings for comparison
+        torch.manual_seed(42)
+        gt_config = create_ground_truth_config(
+            parscale_n=1,
+            parscale_n_tokens=0,
+            **config_params
+        )
+        gt_model = create_ground_truth_model(gt_config)
+
+        # Sync weights (both should have identical parameters)
+        standard_state = standard_model.state_dict()
+        gt_state = gt_model.state_dict()
+        
+        # Check that they have the same parameter structure
+        assert set(standard_state.keys()) == set(gt_state.keys()), (
+            "Parameter structures should be identical for parscale_n=1, parscale_n_tokens=0"
+        )
+
+        # Sync weights
+        for name, param in standard_state.items():
+            if name in gt_state:
+                param.data.copy_(gt_state[name].data)
+
+        with torch.no_grad():
+            standard_output = standard_model(input_ids)
+            gt_output = gt_model(input_ids)
+
+        # Outputs should be identical
+        assert torch.allclose(
+            standard_output.logits, gt_output.logits, atol=1e-6, rtol=1e-5
+        ), (
+            f"Single replica no prefix should equal standard: "
+            f"max diff = {(standard_output.logits - gt_output.logits).abs().max()}"
+        )
+
+    def test_multi_replica_no_prefix_equals_standard(self):
+        """Test that parscale_n>1, parscale_n_tokens=0 behaves like standard model."""
+        config_params = {
+            "hidden_size": 64,
+            "num_hidden_layers": 2,
+            "num_attention_heads": 4,
+            "num_key_value_heads": 2,
+            "vocab_size": 1000,
+            "max_position_embeddings": 512,
+        }
+
+        batch_size = 2
+        seq_len = 8
+        input_ids = torch.randint(0, config_params["vocab_size"], (batch_size, seq_len))
+
+        # Create standard-like model (single replica, no prefix)
+        torch.manual_seed(42)
+        standard_config = Qwen2ParScaleConfig(
+            parscale_n=1,
+            parscale_n_tokens=0, 
+            **config_params
+        )
+        standard_model = Qwen2ParScaleForCausalLM(standard_config)
+
+        # Create multi-replica model with no prefix tokens (should be equivalent)
+        torch.manual_seed(42)
+        multi_config = Qwen2ParScaleConfig(
+            parscale_n=4,
+            parscale_n_tokens=0,  # No prefix tokens = no diversity
+            **config_params
+        )
+        multi_model = Qwen2ParScaleForCausalLM(multi_config)
+
+        # Sync the shared weights (non-ParScale parameters should be identical)
+        standard_state = standard_model.state_dict()
+        multi_state = multi_model.state_dict()
+        
+        for name, param in multi_state.items():
+            if name in standard_state:
+                # Copy from standard to multi-replica model
+                param.data.copy_(standard_state[name].data)
+
+        with torch.no_grad():
+            standard_output = standard_model(input_ids)
+            multi_output = multi_model(input_ids)
+
+        # Outputs should be equivalent since all replicas are identical without prefix tokens
+        assert torch.allclose(
+            standard_output.logits, multi_output.logits, atol=1e-5, rtol=1e-4
+        ), (
+            f"Multi-replica with no prefix should equal standard: "
+            f"max diff = {(standard_output.logits - multi_output.logits).abs().max()}"
+        )
+
+    def test_no_prefix_models_have_no_parscale_cache(self):
+        """Test that models with parscale_n_tokens=0 don't create ParscaleCache."""
+        config_params = {
+            "hidden_size": 64,
+            "num_hidden_layers": 2,
+            "num_attention_heads": 4,
+            "num_key_value_heads": 2,
+            "vocab_size": 1000,
+            "parscale_n": 4,
+            "parscale_n_tokens": 0,  # No prefix tokens
+        }
+
+        batch_size = 2
+        seq_len = 8
+        input_ids = torch.randint(0, config_params["vocab_size"], (batch_size, seq_len))
+
+        config = Qwen2ParScaleConfig(**config_params)
+        model = Qwen2ParScaleForCausalLM(config)
+
+        with torch.no_grad():
+            output = model(input_ids, use_cache=True)
+
+        # Should use DynamicCache, not ParscaleCache 
+        from transformers.cache_utils import DynamicCache
+        from parscale_xattn.modeling_base import ParscaleCache
+        
+        assert isinstance(output.past_key_values, DynamicCache), (
+            "With parscale_n_tokens=0, should use DynamicCache"
+        )
+        assert not isinstance(output.past_key_values, ParscaleCache), (
+            "With parscale_n_tokens=0, should NOT use ParscaleCache"
+        )
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
