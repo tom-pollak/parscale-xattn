@@ -130,18 +130,18 @@ class CrossReplicaAttention(nn.Module):
         k = self.k_proj(hidden_states)
         v = self.v_proj(hidden_states)
 
-        # Reshape for cross-replica attention: (p*b, s, d) -> (b*s, h, p, d_h)
-        # This groups tokens by position across replicas for same-position attention
-        q = rearrange(q, "(p b) s (h d_h) -> (b s) h p d_h", p=p, h=self.num_heads)
+        # Reshape for cross-replica attention: (p*b, s, d) -> (b, s, h, p, d_h)
+        # This keeps sequence positions separate to prevent information leakage
+        q = rearrange(q, "(p b) s (h d_h) -> b s h p d_h", p=p, h=self.num_heads)
         k = rearrange(
             k,
-            "(p b) s (h d_h) -> (b s) h p d_h",
+            "(p b) s (h d_h) -> b s h p d_h",
             p=p,
             h=self.num_key_value_heads,
         )
         v = rearrange(
             v,
-            "(p b) s (h d_h) -> (b s) h p d_h",
+            "(p b) s (h d_h) -> b s h p d_h",
             p=p,
             h=self.num_key_value_heads,
         )
@@ -149,29 +149,34 @@ class CrossReplicaAttention(nn.Module):
         # Apply replica-specific RoPE if provided
         if replica_position_embeddings is not None:
             cos, sin = replica_position_embeddings
-            # cos/sin are (b, p, head_dim). We need to reshape for (b*s, p, head_dim)
-            # Expand across sequence length: (b, p, head_dim) -> (b, s, p, head_dim) -> (b*s, p, head_dim)
-            cos = cos.unsqueeze(1).expand(b, s, p, -1).reshape(b * s, p, -1)
-            sin = sin.unsqueeze(1).expand(b, s, p, -1).reshape(b * s, p, -1)
-            q, k = apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1)
+            # cos/sin are (b, p, head_dim). We need to expand for (b, s, p, head_dim)
+            # Expand across sequence length: (b, p, head_dim) -> (b, s, p, head_dim)
+            cos = cos.unsqueeze(1).expand(b, s, p, -1)
+            sin = sin.unsqueeze(1).expand(b, s, p, -1)
+            q, k = apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=2)
 
-        # Repeat K,V for Grouped Query Attention (GQA)
-        k = repeat_kv(k, self.num_key_value_groups)
-        v = repeat_kv(v, self.num_key_value_groups)
+        # Repeat K,V for Grouped Query Attention (GQA) with new tensor shape
+        # Shape: (b, s, h, p, d_h) where h is num_key_value_heads
+        if self.num_key_value_groups > 1:
+            k = k.unsqueeze(2).expand(b, s, self.num_key_value_groups, self.num_key_value_heads, p, -1)
+            k = k.reshape(b, s, self.num_heads, p, -1)
+            v = v.unsqueeze(2).expand(b, s, self.num_key_value_groups, self.num_key_value_heads, p, -1)
+            v = v.reshape(b, s, self.num_heads, p, -1)
 
-        # Apply scaled dot-product attention
-        # Note: is_causal=False because we want full attention across replicas for each position
+        # Apply scaled dot-product attention position by position
+        # Shape: (b, s, h, p, d_h) - each position attends to same position across replicas
+        # This prevents information leakage since positions are processed separately
         attn_output = F.scaled_dot_product_attention(
             q,
             k,
             v,
             dropout_p=self.attention_dropout if self.training else 0.0,
-            is_causal=False,
+            is_causal=False,  # No causal constraint needed within same position across replicas
         )
 
-        # Reshape back to original format: (b*s, h, p, d_h) -> (p*b, s, h*d_h)
+        # Reshape back to original format: (b, s, h, p, d_h) -> (p*b, s, h*d_h)
         attn_output = rearrange(
-            attn_output, "(b s) h p d_h -> (p b) s (h d_h)", p=p, b=b, s=s
+            attn_output, "b s h p d_h -> (p b) s (h d_h)", p=p
         )
 
         # Apply output projection
