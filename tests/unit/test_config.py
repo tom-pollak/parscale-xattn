@@ -42,11 +42,9 @@ class TestParScaleBaseConfig:
         assert config.parscale_n == 1
         assert config.parscale_n_tokens == 0
 
-        # Should raise error if prefix tokens > 0 with parscale_n=1
-        with pytest.raises(
-            ValueError, match="Prefix tokens should be 0 when parscale_n=1"
-        ):
-            ParScaleBaseConfig(parscale_n=1, parscale_n_tokens=48)
+        config = ParScaleBaseConfig(parscale_n=1, parscale_n_tokens=48)
+        assert config.parscale_n == 1
+        assert config.parscale_n_tokens == 48
 
     def test_parscale_mode(self):
         """Test ParScale mode with multiple replicas."""

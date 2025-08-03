@@ -743,7 +743,7 @@ class ParScaleBaseModel(ParScaleBasePreTrainedModel):
 
         # The trained prefix is saved in layer.self_attn.prefix_k / layer.self_attn.prefix_v
         # We extract them to construct ParscaleCache when prefix tokens are enabled.
-        if (self.config.parscale_n_tokens > 0 and 
+        if (self.config.parscale_n_tokens > 0 and
             (past_key_values is None or past_key_values.get_seq_length() == 0)):
             past_key_values = ParscaleCache(
                 [layer.self_attn.prefix_k for layer in self.layers],

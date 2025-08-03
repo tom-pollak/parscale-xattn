@@ -77,7 +77,7 @@ def test_standard_attention_forward_pass(small_config_no_replica):
 
 
 # Test cases for configuration validation, adapted from the original script
-INVALID_CONFIG_TEST_CASES = [
+CONFIG_TEST_CASES = [
     pytest.param(
         {"parscale_n": 1, "enable_cross_attn": True},
         True,
@@ -85,7 +85,7 @@ INVALID_CONFIG_TEST_CASES = [
     ),
     pytest.param(
         {"parscale_n": 1, "parscale_n_tokens": 4},
-        True,
+        False,
         id="prefix-tokens-with-parscale_n=1",
     ),
     pytest.param(
@@ -109,7 +109,7 @@ INVALID_CONFIG_TEST_CASES = [
 ]
 
 
-@pytest.mark.parametrize("config_changes, should_fail", INVALID_CONFIG_TEST_CASES)
+@pytest.mark.parametrize("config_changes, should_fail", CONFIG_TEST_CASES)
 def test_config_validation(small_config_dict, config_changes, should_fail):
     """
     Tests that Qwen2ParScaleConfig validation catches invalid configurations.

@@ -4,7 +4,7 @@ from typing import Optional, Tuple
 
 import torch
 import torch.nn.functional as F
-from einops import rearrange
+from einops import rearrange, repeat
 from torch import nn
 
 from .config_cross_attn import ParScaleCrossAttnConfig
@@ -42,8 +42,8 @@ def rotate_half(x):
 
 def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     """
-    This is the equivalent of torch.repeat_interleave(x, dim=1, repeats=n_rep). The hidden states go from (batch,
-    num_key_value_heads, seqlen, head_dim) to (batch, num_attention_heads, seqlen, head_dim)
+    This is the equivalent of torch.repeat_interleave(x, dim=1, repeats=n_rep). The hidden states go from
+    (batch, num_key_value_heads, seqlen, head_dim) to (batch, num_attention_heads, seqlen, head_dim)
     """
     batch, num_key_value_heads, slen, head_dim = hidden_states.shape
     if n_rep == 1:
@@ -156,12 +156,10 @@ class CrossReplicaAttention(nn.Module):
             q, k = apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=2)
 
         # Repeat K,V for Grouped Query Attention (GQA) with new tensor shape
-        # Shape: (b, s, h, p, d_h) where h is num_key_value_heads
+        # Shape: (b, s, h, p, d_h) where h is num_key_value_heads -> (b, s, num_heads, p, d_h)
         if self.num_key_value_groups > 1:
-            k = k.unsqueeze(2).expand(b, s, self.num_key_value_groups, self.num_key_value_heads, p, -1)
-            k = k.reshape(b, s, self.num_heads, p, -1)
-            v = v.unsqueeze(2).expand(b, s, self.num_key_value_groups, self.num_key_value_heads, p, -1)
-            v = v.reshape(b, s, self.num_heads, p, -1)
+            k = repeat(k, 'b s h p d_h -> b s (g h) p d_h', g=self.num_key_value_groups)
+            v = repeat(v, 'b s h p d_h -> b s (g h) p d_h', g=self.num_key_value_groups)
 
         # Apply scaled dot-product attention position by position
         # Shape: (b, s, h, p, d_h) - each position attends to same position across replicas
