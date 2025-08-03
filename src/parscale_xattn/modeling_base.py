@@ -280,7 +280,7 @@ class Qwen2Attention(nn.Module):
             if attention_mask is not None:
                 attention_mask = torch.cat(
                     [
-                        torch.ones(
+                        torch.zeros(
                             (
                                 attention_mask.shape[0],
                                 attention_mask.shape[1],
