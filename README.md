@@ -2,7 +2,7 @@
 
 PARSCALE introduces the third scaling paradigm for scaling LLMs: leverages parallel computation during both training and inference time (Parallel Scaling, or ParScale).
 
-This extension adds **cross-attention across model replicas** to the ParScale paradigm, enabling more flexible data-dependent communication between replicas beyond the existing prefix token mechanism.
+This extension adds **cross-replica attention** to the ParScale paradigm, enabling more flexible data-dependent communication between replicas beyond the existing prefix token mechanism.
 
 ## Quick Start
 
