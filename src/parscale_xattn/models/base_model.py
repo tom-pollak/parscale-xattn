@@ -676,6 +676,12 @@ class ParScaleBaseModel(ParScaleBasePreTrainedModel):
     def set_input_embeddings(self, value):
         self.embed_tokens = value
 
+    def use_prefix_cache(self, past_key_values: Optional[Cache]) -> bool:
+        """Whether to use prefix cache based on parscale configuration."""
+        return self.config.parscale_n_tokens > 0 and (
+            past_key_values is None or past_key_values.get_seq_length() == 0
+        )
+
     @add_start_docstrings_to_model_forward(PARSCALE_INPUTS_DOCSTRING)
     def forward(
         self,
@@ -739,8 +745,7 @@ class ParScaleBaseModel(ParScaleBasePreTrainedModel):
 
         # The trained prefix is saved in layer.self_attn.prefix_k / layer.self_attn.prefix_v
         # We extract them to construct ParscaleCache when prefix tokens are enabled.
-        if (self.config.parscale_n_tokens > 0 and
-            (past_key_values is None or past_key_values.get_seq_length() == 0)):
+        if self.use_prefix_cache(past_key_values):
             past_key_values = ParscaleCache(
                 [layer.self_attn.prefix_k for layer in self.layers],
                 [layer.self_attn.prefix_v for layer in self.layers],
