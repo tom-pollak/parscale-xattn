@@ -17,27 +17,18 @@ from transformers.modeling_outputs import (
     CausalLMOutputWithPast,
 )
 from transformers.processing_utils import Unpack
-from transformers.utils import (
-    add_start_docstrings,
-    add_start_docstrings_to_model_forward,
-    replace_return_docstrings,
-)
 
-from .config_cross_attn import ParScaleCrossAttnConfig
-from .cross_attention import CrossReplicaAttention
-from .modeling_base import (
+from ..configs import ParScaleConfig
+from .layers.cross_replica_attn import CrossReplicaAttention
+from .base_model import (
+    ParscaleCache,
     ParScaleBaseModel,
     ParScaleBaseDecoderLayer,
     ParScaleBaseForCausalLM,
-    ParScaleBasePreTrainedModel,
     Qwen2RMSNorm,
     Qwen2RotaryEmbedding,
-    PARSCALE_START_DOCSTRING,
-    PARSCALE_INPUTS_DOCSTRING,
     KwargsForCausalLM,
 )
-
-_CONFIG_FOR_DOC = "ParScaleCrossAttnConfig"
 
 
 class ParScaleCrossAttnDecoderLayer(ParScaleBaseDecoderLayer):
@@ -50,7 +41,7 @@ class ParScaleCrossAttnDecoderLayer(ParScaleBaseDecoderLayer):
     - Conditional cross-attention based on configuration
     """
 
-    def __init__(self, config: ParScaleCrossAttnConfig, layer_idx: int):
+    def __init__(self, config: ParScaleConfig, layer_idx: int):
         super().__init__(config, layer_idx)
         self.config = config
         self.layer_idx = layer_idx
@@ -105,11 +96,7 @@ class ParScaleCrossAttnDecoderLayer(ParScaleBaseDecoderLayer):
         )
 
 
-@add_start_docstrings(
-    "The ParScale Model with cross-replica attention outputting raw hidden-states without any specific head on top.",
-    PARSCALE_START_DOCSTRING,
-)
-class ParScaleCrossAttnModel(ParScaleBaseModel):
+class ParScaleModel(ParScaleBaseModel):
     """
     ParScale model with cross-replica attention capabilities.
 
@@ -119,7 +106,7 @@ class ParScaleCrossAttnModel(ParScaleBaseModel):
     - Layer-specific cross-attention configuration
     """
 
-    def __init__(self, config: ParScaleCrossAttnConfig):
+    def __init__(self, config: ParScaleConfig):
         # Initialize with base config, but we'll override the layers
         super().__init__(config)
 
@@ -146,10 +133,9 @@ class ParScaleCrossAttnModel(ParScaleBaseModel):
         """Whether to use prefix cache based on parscale configuration."""
         return self.config.parscale_n > 1 and self.config.parscale_n_tokens > 0
 
-    @add_start_docstrings_to_model_forward(PARSCALE_INPUTS_DOCSTRING)
     def forward(
         self,
-        input_ids: torch.LongTensor = None,
+        input_ids: torch.LongTensor = None,  # type: ignore
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         past_key_values: Optional[Cache] = None,
@@ -211,8 +197,6 @@ class ParScaleCrossAttnModel(ParScaleBaseModel):
             if use_cache and (
                 past_key_values is None or past_key_values.get_seq_length() == 0
             ):
-                from .modeling_base import ParscaleCache
-
                 past_key_values = ParscaleCache(
                     [layer.self_attn.prefix_k for layer in self.layers],
                     [layer.self_attn.prefix_v for layer in self.layers],
@@ -364,7 +348,7 @@ class ParScaleCrossAttnModel(ParScaleBaseModel):
         return output if return_dict else output.to_tuple()
 
 
-class ParScaleCrossAttnForCausalLM(ParScaleBaseForCausalLM):
+class ParScaleForCausalLM(ParScaleBaseForCausalLM):
     """
     ParScale model with cross-replica attention for causal language modeling.
 
@@ -374,7 +358,7 @@ class ParScaleCrossAttnForCausalLM(ParScaleBaseForCausalLM):
     def __init__(self, config):
         # Initialize with base class, but replace the model
         super().__init__(config)
-        self.model = ParScaleCrossAttnModel(config)
+        self.model = ParScaleModel(config)
 
         # Re-initialize weights since we replaced the model
         self.post_init()
@@ -402,10 +386,6 @@ class ParScaleCrossAttnForCausalLM(ParScaleBaseForCausalLM):
         else:
             super()._init_weights(module)
 
-    @add_start_docstrings_to_model_forward(PARSCALE_INPUTS_DOCSTRING)
-    @replace_return_docstrings(
-        output_type=CausalLMOutputWithPast, config_class=_CONFIG_FOR_DOC
-    )
     def forward(
         self,
         input_ids: torch.LongTensor = None,
@@ -422,38 +402,6 @@ class ParScaleCrossAttnForCausalLM(ParScaleBaseForCausalLM):
         num_logits_to_keep: int = 0,
         **kwargs: Unpack[KwargsForCausalLM],
     ) -> Union[Tuple, CausalLMOutputWithPast]:
-        r"""
-        Args:
-            labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
-                Labels for computing the masked language modeling loss. Indices should either be in `[0, ...,
-                config.vocab_size]` or -100 (see `input_ids` docstring). Tokens with indices set to `-100` are ignored
-                (masked), the loss is only computed for the tokens with labels in `[0, ..., config.vocab_size]`.
-
-            num_logits_to_keep (`int`, *optional*):
-                Calculate logits for the last `num_logits_to_keep` tokens. If `0`, calculate logits for all
-                `input_ids` (special case). Only last token logits are needed for generation, and calculating them only for that
-                token can save memory, which becomes pretty significant for long sequences or large vocabulary size.
-
-        Returns:
-
-        Example:
-
-        ```python
-        >>> from parscale_xattn import ParScaleCrossAttnForCausalLM, ParScaleCrossAttnConfig
-        >>> from transformers import AutoTokenizer
-
-        >>> config = ParScaleCrossAttnConfig(parscale_n=4, enable_cross_attn=True)
-        >>> model = ParScaleCrossAttnForCausalLM(config)
-        >>> tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B")
-
-        >>> prompt = "Hey, are you conscious? Can you talk to me?"
-        >>> inputs = tokenizer(prompt, return_tensors="pt")
-
-        >>> # Generate
-        >>> generate_ids = model.generate(inputs.input_ids, max_length=30)
-        >>> tokenizer.batch_decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
-        ```
-        """
         output_attentions = (
             output_attentions
             if output_attentions is not None

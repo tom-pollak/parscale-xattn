@@ -1,43 +1,36 @@
 """
-Base ParScale model implementation without cross-attention extensions.
-Based on the original ParScale research implementation.
+This is the inference code for ParScale, Based on Qwen2. It can be used directly to load existing Qwen2 models (setting parscale_n = 1 by default).
+All modifications are wrapped within the condition 'parscale_n > 1'.
+If you are interested in how ParScale is implemented, please search for "parscale_n" in this file.
 """
 
 from typing import Callable, List, Optional, Tuple, Union
 
 import torch
-from einops import repeat, rearrange
 from torch import nn
+from einops import repeat, rearrange
+
 from transformers.activations import ACT2FN
 from transformers.cache_utils import Cache, DynamicCache, StaticCache
-from transformers.generation import GenerationMixin
+from transformers.generation import GenerationMixin  # type: ignore
 from transformers.modeling_attn_mask_utils import AttentionMaskConverter
 from transformers.modeling_flash_attention_utils import FlashAttentionKwargs
 from transformers.modeling_outputs import (
     BaseModelOutputWithPast,
     CausalLMOutputWithPast,
-    QuestionAnsweringModelOutput,
-    SequenceClassifierOutputWithPast,
-    TokenClassifierOutput,
 )
 from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS, PreTrainedModel
 from transformers.processing_utils import Unpack
 from transformers.utils import (
-    LossKwargs,
-    add_code_sample_docstrings,
-    add_start_docstrings,
-    add_start_docstrings_to_model_forward,
+    LossKwargs,  # type: ignore
     logging,
-    replace_return_docstrings,
 )
+from parscale_xattn.configs import ParScaleConfig
+from typing import Any, Dict
 
-from .config_base import ParScaleBaseConfig
 
 logger = logging.get_logger(__name__)
-
-_CHECKPOINT_FOR_DOC = "meta-qwen2/Qwen2-2-7b-hf"
-_CONFIG_FOR_DOC = "ParScaleBaseConfig"
 
 
 class Qwen2MLP(nn.Module):
@@ -64,7 +57,25 @@ def rotate_half(x):
 
 
 def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
-    """Applies Rotary Position Embedding to the query and key tensors."""
+    """Applies Rotary Position Embedding to the query and key tensors.
+
+    Args:
+        q (`torch.Tensor`): The query tensor.
+        k (`torch.Tensor`): The key tensor.
+        cos (`torch.Tensor`): The cosine part of the rotary embedding.
+        sin (`torch.Tensor`): The sine part of the rotary embedding.
+        position_ids (`torch.Tensor`, *optional*):
+            Deprecated and unused.
+        unsqueeze_dim (`int`, *optional*, defaults to 1):
+            The 'unsqueeze_dim' argument specifies the dimension along which to unsqueeze cos[position_ids] and
+            sin[position_ids] so that they can be properly broadcasted to the dimensions of q and k. For example, note
+            that cos[position_ids] and sin[position_ids] have the shape [batch_size, seq_len, head_dim]. Then, if q and
+            k have the shape [batch_size, heads, seq_len, head_dim], then setting unsqueeze_dim=1 makes
+            cos[position_ids] and sin[position_ids] broadcastable to the shapes of q and k. Similarly, if q and k have
+            the shape [batch_size, seq_len, heads, head_dim], then set unsqueeze_dim=2.
+    Returns:
+        `tuple(torch.Tensor)` comprising of the query and key tensors rotated using the Rotary Position Embedding.
+    """
     cos = cos.unsqueeze(unsqueeze_dim)
     sin = sin.unsqueeze(unsqueeze_dim)
     q_embed = (q * cos) + (rotate_half(q) * sin)
@@ -94,10 +105,10 @@ def eager_attention_forward(
     attention_mask: Optional[torch.Tensor],
     scaling: float,
     dropout: float = 0.0,
-    **kwargs,
+    **kwargs: Unpack[FlashAttentionKwargs],
 ):
-    key_states = repeat_kv(key, module.num_key_value_groups)
-    value_states = repeat_kv(value, module.num_key_value_groups)
+    key_states = repeat_kv(key, module.num_key_value_groups)  # type: ignore
+    value_states = repeat_kv(value, module.num_key_value_groups)  # type: ignore
 
     attn_weights = torch.matmul(query, key_states.transpose(2, 3)) * scaling
     if attention_mask is not None:
@@ -132,7 +143,7 @@ class ParscaleCache(DynamicCache):
         key_states: torch.Tensor,
         value_states: torch.Tensor,
         layer_idx: int,
-        cache_kwargs: Optional[dict] = None,
+        cache_kwargs: Optional[Dict[str, Any]] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         if self.key_cache[layer_idx].size(0) != key_states.size(0):
             # first time generation
@@ -162,9 +173,9 @@ class ParscaleCache(DynamicCache):
 
 
 class Qwen2Attention(nn.Module):
-    """Multi-headed attention from 'Attention Is All You Need' paper with ParScale prefix tokens"""
+    """Multi-headed attention from 'Attention Is All You Need' paper"""
 
-    def __init__(self, config: ParScaleBaseConfig, layer_idx: int):
+    def __init__(self, config: ParScaleConfig, layer_idx: int):
         super().__init__()
         self.config = config
         self.layer_idx = layer_idx
@@ -189,7 +200,7 @@ class Qwen2Attention(nn.Module):
         self.o_proj = nn.Linear(
             config.num_attention_heads * self.head_dim, config.hidden_size, bias=False
         )
-        if config.parscale_n_tokens > 0:
+        if config.parscale_n > 1:
             self.prefix_k = nn.Parameter(
                 torch.empty(
                     (
@@ -239,44 +250,10 @@ class Qwen2Attention(nn.Module):
                 key_states, value_states, self.layer_idx, cache_kwargs
             )
 
-        # Expand attention mask to contain the prefix tokens
-        n_virtual_tokens = self.config.parscale_n_tokens
-        if attention_mask is not None:
-            attention_mask = torch.cat(
-                [
-                    torch.zeros(
-                        (
-                            attention_mask.shape[0],
-                            attention_mask.shape[1],
-                            attention_mask.shape[2],
-                            self.config.parscale_n_tokens,
-                        ),
-                        dtype=attention_mask.dtype,
-                        device=attention_mask.device,
-                    ),
-                    attention_mask,
-                ],
-                dim=3,
-            )
+        if self.config.parscale_n > 1:
+            # Expand attention mask to contain the prefix tokens
+            n_virtual_tokens = self.config.parscale_n_tokens
 
-        if query_states.size(2) != 1:
-            # Training/prefill mode: add prefix tokens to sequence dimension (dim=2)
-            query_states = torch.cat(
-                [
-                    torch.zeros(
-                        [
-                            query_states.size(0),
-                            query_states.size(1),
-                            n_virtual_tokens,
-                            query_states.size(3),
-                        ],
-                        dtype=query_states.dtype,
-                        device=query_states.device,
-                    ),
-                    query_states,
-                ],
-                dim=2,
-            )
             if attention_mask is not None:
                 attention_mask = torch.cat(
                     [
@@ -284,16 +261,51 @@ class Qwen2Attention(nn.Module):
                             (
                                 attention_mask.shape[0],
                                 attention_mask.shape[1],
+                                attention_mask.shape[2],
                                 self.config.parscale_n_tokens,
-                                attention_mask.shape[3],
                             ),
                             dtype=attention_mask.dtype,
                             device=attention_mask.device,
                         ),
                         attention_mask,
                     ],
+                    dim=3,
+                )
+
+            if query_states.size(2) != 1:
+                query_states = torch.cat(
+                    [
+                        torch.zeros(
+                            [
+                                query_states.size(0),
+                                query_states.size(1),
+                                n_virtual_tokens,
+                                query_states.size(3),
+                            ],
+                            dtype=query_states.dtype,
+                            device=query_states.device,
+                        ),
+                        query_states,
+                    ],
                     dim=2,
                 )
+                if attention_mask is not None:
+                    attention_mask = torch.cat(
+                        [
+                            torch.zeros(
+                                (
+                                    attention_mask.shape[0],
+                                    attention_mask.shape[1],
+                                    self.config.parscale_n_tokens,
+                                    attention_mask.shape[3],
+                                ),
+                                dtype=attention_mask.dtype,
+                                device=attention_mask.device,
+                            ),
+                            attention_mask,
+                        ],
+                        dim=2,
+                    )
 
         sliding_window = None
         if (
@@ -330,7 +342,7 @@ class Qwen2Attention(nn.Module):
             **kwargs,
         )
 
-        if n_virtual_tokens > 0 and query_states.size(2) != 1:
+        if self.config.parscale_n > 1 and query_states.size(2) != 1:
             # Remove the prefix part
             attn_output = attn_output[:, n_virtual_tokens:]
         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
@@ -358,8 +370,8 @@ class Qwen2RMSNorm(nn.Module):
         return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
 
 
-class ParScaleBaseDecoderLayer(nn.Module):
-    def __init__(self, config: ParScaleBaseConfig, layer_idx: int):
+class Qwen2DecoderLayer(nn.Module):
+    def __init__(self, config: ParScaleConfig, layer_idx: int):
         super().__init__()
         self.hidden_size = config.hidden_size
         self.self_attn = Qwen2Attention(config=config, layer_idx=layer_idx)
@@ -422,7 +434,7 @@ class ParScaleBaseDecoderLayer(nn.Module):
 
 
 class Qwen2RotaryEmbedding(nn.Module):
-    def __init__(self, config: ParScaleBaseConfig, device=None):
+    def __init__(self, config: ParScaleConfig, device=None):
         super().__init__()
         # BC: "rope_type" was originally "type"
         if hasattr(config, "rope_scaling") and config.rope_scaling is not None:
@@ -499,32 +511,11 @@ class Qwen2RotaryEmbedding(nn.Module):
         return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
 
 
-PARSCALE_START_DOCSTRING = r"""
-    This model inherits from [`PreTrainedModel`]. Check the superclass documentation for the generic methods the
-    library implements for all its model (such as downloading or saving, resizing the input embeddings, pruning heads
-    etc.)
-
-    This model is also a PyTorch [torch.nn.Module](https://pytorch.org/docs/stable/nn.html#torch.nn.Module) subclass.
-    Use it as a regular PyTorch Module and refer to the PyTorch documentation for all matter related to general usage
-    and behavior.
-
-    Parameters:
-        config ([`ParScaleBaseConfig`]):
-            Model configuration class with all the parameters of the model. Initializing with a config file does not
-            load the weights associated with the model, only the configuration. Check out the
-            [`~PreTrainedModel.from_pretrained`] method to load the model weights.
-"""
-
-
-@add_start_docstrings(
-    "The bare ParScale Model outputting raw hidden-states without any specific head on top.",
-    PARSCALE_START_DOCSTRING,
-)
-class ParScaleBasePreTrainedModel(PreTrainedModel):
-    config_class = ParScaleBaseConfig
+class Qwen2PreTrainedModel(PreTrainedModel):
+    config_class = ParScaleConfig
     base_model_prefix = "model"
     supports_gradient_checkpointing = True
-    _no_split_modules = ["ParScaleBaseDecoderLayer"]
+    _no_split_modules = ["Qwen2DecoderLayer"]
     _skip_keys_device_placement = ["past_key_values"]
     _supports_flash_attn_2 = True
     _supports_sdpa = True
@@ -543,106 +534,10 @@ class ParScaleBasePreTrainedModel(PreTrainedModel):
             module.weight.data.normal_(mean=0.0, std=std)
             if module.padding_idx is not None:
                 module.weight.data[module.padding_idx].zero_()
-        elif isinstance(module, Qwen2Attention):
-            if hasattr(module, "prefix_k"):
-                module.prefix_k.data.normal_(mean=0.0, std=std)
-            if hasattr(module, "prefix_v"):
-                module.prefix_v.data.normal_(mean=0.0, std=std)
-        elif isinstance(module, Qwen2Attention):
-            if hasattr(module, "prefix_k"):
-                module.prefix_k.data.normal_(mean=0.0, std=std)
-            if hasattr(module, "prefix_v"):
-                module.prefix_v.data.normal_(mean=0.0, std=std)
 
 
-PARSCALE_INPUTS_DOCSTRING = r"""
-    Args:
-        input_ids (`torch.LongTensor` of shape `(batch_size, sequence_length)`):
-            Indices of input sequence tokens in the vocabulary. Padding will be ignored by default should you provide
-            it.
-
-            Indices can be obtained using [`AutoTokenizer`]. See [`PreTrainedTokenizer.encode`] and
-            [`PreTrainedTokenizer.__call__`] for details.
-
-            [What are input IDs?](../glossary#input-ids)
-        attention_mask (`torch.Tensor` of shape `(batch_size, sequence_length)`, *optional*):
-            Mask to avoid performing attention on padding token indices. Mask values selected in `[0, 1]`:
-
-            - 1 for tokens that are **not masked**,
-            - 0 for tokens that are **masked**.
-
-            [What are attention masks?](../glossary#attention-mask)
-
-            Indices can be obtained using [`AutoTokenizer`]. See [`PreTrainedTokenizer.encode`] and
-            [`PreTrainedTokenizer.__call__`] for details.
-
-            If `past_key_values` is used, optionally only the last `input_ids` have to be input (see
-            `past_key_values`).
-
-            If you want to change padding behavior, you should read [`modeling_opt._prepare_decoder_attention_mask`]
-            and modify to your needs. See diagram 1 in [the paper](https://arxiv.org/abs/1910.13461) for more
-            information on the default strategy.
-
-            - 1 indicates the head is **not masked**,
-            - 0 indicates the head is **masked**.
-        position_ids (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
-            Indices of positions of each input sequence tokens in the position embeddings. Selected in the range `[0,
-            config.n_positions - 1]`.
-
-            [What are position IDs?](../glossary#position-ids)
-        past_key_values (`Cache` or `tuple(tuple(torch.FloatTensor))`, *optional*):
-            Pre-computed hidden-states (key and values in the self-attention blocks and in the cross-attention
-            blocks) that can be used to speed up sequential decoding. This typically consists in the `past_key_values`
-            returned by the model at a previous stage of decoding, when `use_cache=True` or `config.use_cache=True`.
-
-            Two formats are allowed:
-            - a [`~cache_utils.Cache`] instance, see our
-            [kv cache guide](https://huggingface.co/docs/transformers/en/kv_cache);
-            - Tuple of `tuple(torch.FloatTensor)` of length `config.n_layers`, with each tuple having 2 tensors of
-            shape `(batch_size, num_heads, sequence_length, embed_size_per_head)`). This is also known as the legacy
-            cache format.
-
-            The model will output the same cache format that is fed as input. If no `past_key_values` are passed, the
-            legacy cache format will be returned.
-
-            If `past_key_values` are used, the user can optionally input only the last `input_ids` (those that don't
-            have their past key value states given to this model) of shape `(batch_size, 1)` instead of all `input_ids`
-            of shape `(batch_size, sequence_length)`.
-        inputs_embeds (`torch.FloatTensor` of shape `(batch_size, sequence_length, hidden_size)`, *optional*):
-            Optionally, instead of passing `input_ids` you can choose to directly pass an embedded representation. This
-            is useful if you want more control over how to convert `input_ids` indices into associated vectors than the
-            model's internal embedding lookup matrix.
-        use_cache (`bool`, *optional*):
-            If set to `True`, `past_key_values` key value states are returned and can be used to speed up decoding (see
-            `past_key_values`).
-        output_attentions (`bool`, *optional*):
-            Whether or not to return the attentions tensors of all attention layers. See `attentions` under returned
-            tensors for more detail.
-        output_hidden_states (`bool`, *optional*):
-            Whether or not to return the hidden states of all layers. See `hidden_states` under returned tensors for
-            more detail.
-        return_dict (`bool`, *optional*):
-            Whether or not to return a [`~utils.ModelOutput`] instead of a plain tuple.
-        cache_position (`torch.LongTensor` of shape `(sequence_length)`, *optional*):
-            Indices depicting the position of the input sequence tokens in the sequence. Contrarily to `position_ids`,
-            this tensor is not affected by padding. It is used to update the cache in the correct position and to infer
-            the complete sequence length.
-"""
-
-
-@add_start_docstrings(
-    "The bare ParScale Model outputting raw hidden-states without any specific head on top.",
-    PARSCALE_START_DOCSTRING,
-)
-class ParScaleBaseModel(ParScaleBasePreTrainedModel):
-    """
-    Transformer decoder consisting of *config.num_hidden_layers* layers. Each layer is a [`ParScaleBaseDecoderLayer`]
-
-    Args:
-        config: ParScaleBaseConfig
-    """
-
-    def __init__(self, config: ParScaleBaseConfig):
+class Qwen2Model(Qwen2PreTrainedModel):
+    def __init__(self, config: ParScaleConfig):
         super().__init__(config)
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
@@ -652,7 +547,7 @@ class ParScaleBaseModel(ParScaleBasePreTrainedModel):
         )
         self.layers = nn.ModuleList(
             [
-                ParScaleBaseDecoderLayer(config, layer_idx)
+                Qwen2DecoderLayer(config, layer_idx)
                 for layer_idx in range(config.num_hidden_layers)
             ]
         )
@@ -671,7 +566,6 @@ class ParScaleBaseModel(ParScaleBasePreTrainedModel):
             )
         self.parscale_aggregate_attn_smoothing = config.parscale_attn_smooth
 
-        # Initialize weights and apply final processing
         self.post_init()
 
     def get_input_embeddings(self):
@@ -680,7 +574,6 @@ class ParScaleBaseModel(ParScaleBasePreTrainedModel):
     def set_input_embeddings(self, value):
         self.embed_tokens = value
 
-    @add_start_docstrings_to_model_forward(PARSCALE_INPUTS_DOCSTRING)
     def forward(
         self,
         input_ids: torch.LongTensor = None,
@@ -741,14 +634,13 @@ class ParScaleBaseModel(ParScaleBasePreTrainedModel):
                     position_ids, "b s -> (n_parscale b) s", n_parscale=self.parscale_n
                 )
 
-        # The trained prefix is saved in layer.self_attn.prefix_k / layer.self_attn.prefix_v
-        # We extract them to construct ParscaleCache when prefix tokens are enabled.
-        if (self.config.parscale_n_tokens > 0 and
-            (past_key_values is None or past_key_values.get_seq_length() == 0)):
-            past_key_values = ParscaleCache(
-                [layer.self_attn.prefix_k for layer in self.layers],
-                [layer.self_attn.prefix_v for layer in self.layers],
-            )
+            # The trained prefix is saved in layer.self_attn.prefix_k / layer.self_attn.prefix_v
+            # We extract them to construct ParscaleCache.
+            if past_key_values is None or past_key_values.get_seq_length() == 0:
+                past_key_values = ParscaleCache(
+                    [layer.self_attn.prefix_k for layer in self.layers],
+                    [layer.self_attn.prefix_v for layer in self.layers],
+                )
 
         if use_cache and past_key_values is None:
             past_key_values = DynamicCache()
@@ -947,6 +839,24 @@ class ParScaleBaseModel(ParScaleBasePreTrainedModel):
         """
         Creates a causal 4D mask of shape `(batch_size, 1, query_length, key_value_length)` from a 2D mask of shape
         `(batch_size, key_value_length)`, or if the input `attention_mask` is already 4D, do nothing.
+
+        Args:
+            attention_mask (`torch.Tensor`):
+                A 2D attention mask of shape `(batch_size, key_value_length)` or a 4D attention mask of shape
+                `(batch_size, 1, query_length, key_value_length)`.
+            sequence_length (`int`):
+                The sequence length being processed.
+            target_length (`int`):
+                The target length: when generating with static cache, the mask should be as long as the static cache,
+                to account for the 0 padding, the part of the cache that is not filled yet.
+            dtype (`torch.dtype`):
+                The dtype to use for the 4D attention mask.
+            device (`torch.device`):
+                The device to plcae the 4D attention mask on.
+            cache_position (`torch.Tensor`):
+                Indices depicting the position of the input sequence tokens in the sequence.
+            batch_size (`torch.Tensor`):
+                Batch size.
         """
         if attention_mask is not None and attention_mask.dim() == 4:
             # In this case we assume that the mask comes already in inverted form and requires no inversion or slicing.
@@ -985,13 +895,13 @@ class ParScaleBaseModel(ParScaleBasePreTrainedModel):
 class KwargsForCausalLM(FlashAttentionKwargs, LossKwargs): ...
 
 
-class ParScaleBaseForCausalLM(ParScaleBasePreTrainedModel, GenerationMixin):
+class Qwen2ParScaleForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
     _tied_weights_keys = ["lm_head.weight"]
     _tp_plan = {"lm_head": "colwise_rep"}
 
     def __init__(self, config):
         super().__init__(config)
-        self.model = ParScaleBaseModel(config)
+        self.model = Qwen2Model(config)
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
@@ -1016,10 +926,6 @@ class ParScaleBaseForCausalLM(ParScaleBasePreTrainedModel, GenerationMixin):
     def get_decoder(self):
         return self.model
 
-    @add_start_docstrings_to_model_forward(PARSCALE_INPUTS_DOCSTRING)
-    @replace_return_docstrings(
-        output_type=CausalLMOutputWithPast, config_class=_CONFIG_FOR_DOC
-    )
     def forward(
         self,
         input_ids: torch.LongTensor = None,
@@ -1036,19 +942,6 @@ class ParScaleBaseForCausalLM(ParScaleBasePreTrainedModel, GenerationMixin):
         num_logits_to_keep: int = 0,
         **kwargs: Unpack[KwargsForCausalLM],
     ) -> Union[Tuple, CausalLMOutputWithPast]:
-        r"""
-        Args:
-            labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
-                Labels for computing the masked language modeling loss. Indices should either be in `[0, ...,
-                config.vocab_size]` or -100 (see `input_ids` docstring). Tokens with indices set to `-100` are ignored
-                (masked), the loss is only computed for the tokens with labels in `[0, ..., config.vocab_size]`.
-            num_logits_to_keep (`int`, *optional*, defaults to 0):
-                If not 0, only the last `num_logits_to_keep` logits are computed to save memory during generation.
-                If 0, all logits are computed. Should be 0 when `labels` are provided.
-
-        Returns:
-
-        """
         output_attentions = (
             output_attentions
             if output_attentions is not None

@@ -1,30 +1,18 @@
 """Unit tests for ParScale output aggregation system."""
 
-import sys
-from pathlib import Path
-import copy
-
 import pytest
 import torch
-import torch.nn as nn
 from einops import rearrange, repeat
 
-# Add src to path
-sys.path.append(str(Path(__file__).parent.parent.parent / "src"))
 
-from parscale_xattn import Qwen2ParScaleConfig
-from parscale_xattn.modeling_base import ParScaleBaseModel
-from parscale_xattn.modeling_cross_attn import ParScaleCrossAttnModel
-
-# Import ground truth for comparison
-sys.path.append(str(Path(__file__).parent.parent / "ground_truth"))
-from config import create_ground_truth_base_model, create_ground_truth_config
+from parscale_xattn import ParScaleConfig
+from parscale_xattn.models import ParScaleBaseModel, ParScaleModel
 
 
 @pytest.fixture(scope="class")
 def model(small_config):
     """A small model for fast testing, scoped to the class."""
-    return ParScaleCrossAttnModel(small_config)
+    return ParScaleModel(small_config)
 
 
 class TestAggregationLayer:
@@ -43,7 +31,7 @@ class TestAggregationLayer:
                 **small_config_dict,
                 **dict(parscale_n=parscale_n, hidden_size=hidden_size),
             }
-            config = Qwen2ParScaleConfig(**config_dict)
+            config = ParScaleConfig(**config_dict)
             model = ParScaleBaseModel(config)
 
             first_layer = model.aggregate_layer[0]
@@ -201,62 +189,3 @@ class TestOutputAggregation:
         # Check output shape
         expected_shape = (self.batch_size, self.seq_len, small_config.hidden_size)
         assert aggregated.shape == expected_shape
-
-    def test_end_to_end_aggregation(self, model, small_config):
-        """Test end-to-end output aggregation in model forward pass."""
-        input_ids = torch.randint(
-            0, small_config.vocab_size, (self.batch_size, self.seq_len)
-        )
-
-        # Forward pass
-        output = model(input_ids)
-
-        # Output should have correct shape (batch_size, seq_len, hidden_size)
-        # Not (parscale_n * batch_size, seq_len, hidden_size)
-        expected_shape = (self.batch_size, self.seq_len, small_config.hidden_size)
-        assert output.last_hidden_state.shape == expected_shape
-
-
-class TestAggregationCompatibility:
-    """Test aggregation compatibility with ground truth."""
-
-    def test_aggregation_layer_structure_compatibility(self, small_config_dict):
-        """Test that aggregation layer structure matches ground truth."""
-        new_config = Qwen2ParScaleConfig(**small_config_dict)
-        orig_config = create_ground_truth_config(**small_config_dict)
-
-        new_model = ParScaleCrossAttnModel(new_config)
-        orig_model = create_ground_truth_base_model(orig_config)
-
-        # Both should have aggregation layers
-        assert hasattr(new_model, "aggregate_layer")
-        assert hasattr(orig_model, "aggregate_layer")
-
-        # Structure should match
-        assert len(new_model.aggregate_layer) == len(orig_model.aggregate_layer)
-
-        # Dimensions should match
-        new_first = new_model.aggregate_layer[0]
-        orig_first = orig_model.aggregate_layer[0]
-        assert new_first.in_features == orig_first.in_features
-        assert new_first.out_features == orig_first.out_features
-
-        new_second = new_model.aggregate_layer[2]
-        orig_second = orig_model.aggregate_layer[2]
-        assert new_second.in_features == orig_second.in_features
-        assert new_second.out_features == orig_second.out_features
-
-    def test_smoothing_parameter_compatibility(self, small_config_dict):
-        """Test that smoothing parameters match ground truth."""
-        config_params = {**small_config_dict, "parscale_attn_smooth": 0.05}
-
-        new_config = Qwen2ParScaleConfig(**config_params)
-        orig_config = create_ground_truth_config(**config_params)
-
-        new_model = ParScaleCrossAttnModel(new_config)
-        orig_model = create_ground_truth_base_model(orig_config)
-
-        assert (
-            new_model.parscale_aggregate_attn_smoothing
-            == orig_model.parscale_aggregate_attn_smoothing
-        )

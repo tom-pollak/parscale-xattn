@@ -1,12 +1,12 @@
 """Cross-attention configuration extension for ParScale models."""
 
-from .config_base import ParScaleBaseConfig
+from .base_config import ParScaleBaseConfig
 from transformers.utils import logging
 
 logger = logging.get_logger(__name__)
 
 
-class ParScaleCrossAttnConfig(ParScaleBaseConfig):
+class ParScaleConfig(ParScaleBaseConfig):
     """
     Configuration class for ParScale models with cross-attention extensions.
 

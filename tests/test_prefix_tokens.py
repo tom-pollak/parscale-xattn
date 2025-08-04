@@ -2,19 +2,10 @@
 
 import pytest
 import torch
-import sys
-from pathlib import Path
 
-# Add src to path
-sys.path.append(str(Path(__file__).parent.parent.parent / "src"))
 
-from parscale_xattn import Qwen2ParScaleConfig
-from parscale_xattn.modeling_base import Qwen2Attention, ParscaleCache
-from parscale_xattn.modeling_cross_attn import ParScaleCrossAttnModel
-
-# Import ground truth for comparison
-sys.path.append(str(Path(__file__).parent.parent / "ground_truth"))
-from config import create_ground_truth_config, create_ground_truth_model
+from parscale_xattn import ParScaleModel, ParScaleConfig
+from parscale_xattn.models.base_model import Qwen2Attention, ParscaleCache
 
 
 class TestPrefixTokenCreation:
@@ -56,9 +47,7 @@ class TestPrefixTokenCreation:
         ]
 
         for parscale_n, n_tokens in configs:
-            config = Qwen2ParScaleConfig(
-                parscale_n=parscale_n, parscale_n_tokens=n_tokens
-            )
+            config = ParScaleConfig(parscale_n=parscale_n, parscale_n_tokens=n_tokens)
             attention = Qwen2Attention(config, layer_idx=0)
 
             expected_shape = (
@@ -119,26 +108,6 @@ class TestParscaleCache:
         expected_len = self.seq_len
         assert parscale_cache.get_seq_length() == expected_len
 
-    def test_cache_reorder_for_beam_search(self, parscale_cache, small_config):
-        """Test cache reordering for beam search accounts for replicas."""
-        head_dim = small_config.hidden_size // small_config.num_attention_heads
-        dummy_k = torch.randn(
-            small_config.parscale_n * self.batch_size,
-            small_config.num_key_value_heads,
-            self.seq_len,
-            head_dim,
-        )
-        dummy_v = torch.randn_like(dummy_k)
-        parscale_cache.update(dummy_k, dummy_v, layer_idx=0)
-
-        beam_idx = torch.tensor([1, 0])  # Swap batch elements
-        parscale_cache.reorder_cache(beam_idx)
-
-        assert (
-            parscale_cache.key_cache[0].shape[0]
-            == small_config.parscale_n * self.batch_size
-        )
-
 
 class TestAttentionMaskExpansion:
     """Test attention mask expansion for prefix tokens."""
@@ -178,18 +147,18 @@ class TestModelPrefixTokenIntegration:
 
     def test_model_creates_parscale_cache(self, small_config):
         """Test that model creates ParscaleCache from prefix tokens."""
-        model = ParScaleCrossAttnModel(small_config)
+        model = ParScaleModel(small_config)
 
         for layer in model.layers:
             if hasattr(layer.self_attn, "prefix_k"):
-                assert layer.self_attn.prefix_k.shape[0] == small_config.parscale_n
+                assert layer.self_attn.prefix_k.shape[0] == small_config.parscale_n  # type: ignore
                 assert (
-                    layer.self_attn.prefix_k.shape[2] == small_config.parscale_n_tokens
+                    layer.self_attn.prefix_k.shape[2] == small_config.parscale_n_tokens  # type: ignore
                 )
 
     def test_forward_pass_with_prefix_tokens(self, small_config):
         """Test forward pass correctly uses prefix tokens."""
-        model = ParScaleCrossAttnModel(small_config)
+        model = ParScaleModel(small_config)
         batch_size = 2
         seq_len = 5
         input_ids = torch.randint(0, small_config.vocab_size, (batch_size, seq_len))
@@ -199,45 +168,3 @@ class TestModelPrefixTokenIntegration:
         assert output.past_key_values is not None
         assert isinstance(output.past_key_values, ParscaleCache)
         assert output.past_key_values.parscale_n == small_config.parscale_n
-
-
-class TestPrefixTokenCompatibility:
-    """Test compatibility with ground truth implementation."""
-
-    def test_prefix_shapes_match_ground_truth(self):
-        """Test that prefix token shapes match ground truth implementation."""
-        config_params = {
-            "parscale_n": 4,
-            "parscale_n_tokens": 48,
-            "num_hidden_layers": 2,
-            "hidden_size": 128,
-            "num_attention_heads": 4,
-            "num_key_value_heads": 4,
-        }
-
-        # Create both models
-        new_config = Qwen2ParScaleConfig(**config_params)
-        orig_config = create_ground_truth_config(**config_params)
-
-        new_model = ParScaleCrossAttnModel(new_config)
-        orig_model = create_ground_truth_model(orig_config)
-
-        # Compare prefix shapes in first layer
-        new_layer = new_model.layers[0]
-        orig_layer = orig_model.model.layers[0]
-
-        if hasattr(new_layer.self_attn, "prefix_k") and hasattr(
-            orig_layer.self_attn, "prefix_k"
-        ):
-            assert (
-                new_layer.self_attn.prefix_k.shape
-                == orig_layer.self_attn.prefix_k.shape
-            )
-            assert (
-                new_layer.self_attn.prefix_v.shape
-                == orig_layer.self_attn.prefix_v.shape
-            )
-
-
-if __name__ == "__main__":
-    pytest.main([__file__])

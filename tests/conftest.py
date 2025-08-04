@@ -1,11 +1,14 @@
+"""Configuration for ground truth ParScale model."""
+
 import pytest
-import sys
-from pathlib import Path
+import torch
 
-# Add src to path. This allows pytest to find the src modules.
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-
-from parscale_xattn import Qwen2ParScaleConfig
+from parscale_xattn import ParScaleConfig, ParScaleForCausalLM
+from parscale_xattn.modeling_ground_truth import (
+    ParScaleConfig as OrigQwen2ParScaleConfig,
+    Qwen2ParScaleForCausalLM as OrigQwen2ParScaleForCausalLM,
+    Qwen2Model as OrigQwen2Model,
+)
 
 
 @pytest.fixture(scope="module")
@@ -25,8 +28,7 @@ def small_config_dict():
 
 @pytest.fixture(scope="module")
 def small_config(small_config_dict):
-    """A small Qwen2ParScaleConfig object for fast testing."""
-    return Qwen2ParScaleConfig(**small_config_dict)
+    return ParScaleConfig(**small_config_dict)
 
 
 @pytest.fixture(scope="module")
@@ -46,5 +48,46 @@ def small_config_no_replica_dict():
 
 @pytest.fixture(scope="module")
 def small_config_no_replica(small_config_no_replica_dict):
-    """A small Qwen2ParScaleConfig object for standard mode (no replicas)."""
-    return Qwen2ParScaleConfig(**small_config_no_replica_dict)
+    return ParScaleConfig(**small_config_no_replica_dict)
+
+
+@pytest.fixture(scope="module")
+def create_ground_truth_config(**kwargs):
+    """Create a ground truth configuration with the original implementation."""
+    return OrigQwen2ParScaleConfig(**kwargs)
+
+
+@pytest.fixture(scope="module")
+def create_ground_truth_model(config):
+    """Create a ground truth model with the original implementation."""
+    return OrigQwen2ParScaleForCausalLM(config)
+
+
+@pytest.fixture(scope="module")
+def create_ground_truth_base_model(config):
+    """Create a ground truth base model with the original implementation."""
+    return OrigQwen2Model(config)
+
+
+def create_model_pair(orig_config_dict, cross_attn_config_dict=None):
+    """Create a pair of new and original models with synced weights."""
+    # Set seeds for reproducibility
+    if cross_attn_config_dict is None:
+        cross_attn_config_dict = {}
+
+    torch.manual_seed(42)
+    orig_config = OrigQwen2ParScaleConfig(**orig_config_dict)
+    orig_model = OrigQwen2ParScaleForCausalLM(orig_config)
+
+    torch.manual_seed(42)
+    new_config = ParScaleConfig(**orig_config_dict, **cross_attn_config_dict)
+    new_model = ParScaleForCausalLM(new_config)
+
+    # Sync model weights
+    new_state = new_model.state_dict()
+    orig_state = orig_model.state_dict()
+    for name, param in new_state.items():
+        if name in orig_state:
+            param.data.copy_(orig_state[name].data)
+
+    return orig_model, new_model

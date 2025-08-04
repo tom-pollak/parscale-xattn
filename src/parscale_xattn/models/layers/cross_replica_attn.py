@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from einops import rearrange, repeat
 from torch import nn
 
-from .config_cross_attn import ParScaleCrossAttnConfig
+from ...configs import ParScaleConfig
 
 
 def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
@@ -67,7 +67,7 @@ class CrossReplicaAttention(nn.Module):
     - Supports Grouped Query Attention (GQA)
     """
 
-    def __init__(self, config: ParScaleCrossAttnConfig):
+    def __init__(self, config: ParScaleConfig):
         super().__init__()
         self.config = config
         self.hidden_size = config.hidden_size
@@ -158,8 +158,8 @@ class CrossReplicaAttention(nn.Module):
         # Repeat K,V for Grouped Query Attention (GQA) with new tensor shape
         # Shape: (b, s, h, p, d_h) where h is num_key_value_heads -> (b, s, num_heads, p, d_h)
         if self.num_key_value_groups > 1:
-            k = repeat(k, 'b s h p d_h -> b s (g h) p d_h', g=self.num_key_value_groups)
-            v = repeat(v, 'b s h p d_h -> b s (g h) p d_h', g=self.num_key_value_groups)
+            k = repeat(k, "b s h p d_h -> b s (g h) p d_h", g=self.num_key_value_groups)
+            v = repeat(v, "b s h p d_h -> b s (g h) p d_h", g=self.num_key_value_groups)
 
         # Apply scaled dot-product attention position by position
         # Shape: (b, s, h, p, d_h) - each position attends to same position across replicas
@@ -173,9 +173,7 @@ class CrossReplicaAttention(nn.Module):
         )
 
         # Reshape back to original format: (b, s, h, p, d_h) -> (p*b, s, h*d_h)
-        attn_output = rearrange(
-            attn_output, "b s h p d_h -> (p b) s (h d_h)", p=p
-        )
+        attn_output = rearrange(attn_output, "b s h p d_h -> (p b) s (h d_h)", p=p)
 
         # Apply output projection
         attn_output = self.o_proj(attn_output)
