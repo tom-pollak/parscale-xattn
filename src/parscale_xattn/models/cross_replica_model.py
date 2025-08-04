@@ -19,7 +19,7 @@ from transformers.modeling_outputs import (
 from transformers.processing_utils import Unpack
 
 from ..configs import ParScaleConfig
-from .layers.cross_replica_attn import CrossReplicaAttention
+from .cross_replica_attn import CrossReplicaAttention
 from .base_model import (
     ParscaleCache,
     ParScaleBaseModel,

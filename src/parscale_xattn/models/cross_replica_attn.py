@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from einops import rearrange, repeat
 from torch import nn
 
-from ...configs import ParScaleConfig
+from ..configs import ParScaleConfig
 
 
 def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
