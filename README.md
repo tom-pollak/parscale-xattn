@@ -6,46 +6,14 @@ This extension adds **cross-attention across model replicas** to the ParScale pa
 
 ## Quick Start
 
-### Installation
-```bash
-pip install -e .
-```
-
 ### Training
 
-#### Single GPU
-```bash
-# Basic ParScale training (parscale_n=1, like standard Qwen2)
-CONFIG_FILE=configs/parscale.yaml uv run accelerate launch train.py
-
-# ParScale with 4 replicas
-CONFIG_FILE=configs/parscale.yaml uv run accelerate launch train.py --parscale.parscale_n=4
-
-# Cross-attention enabled with 4 replicas
-CONFIG_FILE=configs/cross_attn.yaml uv run accelerate launch train.py --parscale.parscale_n=4
-```
-
-#### Multi-GPU (8 GPUs with FSDP)
 ```bash
 # Basic ParScale training with 8 GPUs
-CONFIG_FILE=configs/parscale.yaml uv run accelerate launch train.py \
-  parscale.parscale_n=4 \
-  training.per_device_train_batch_size=8 \
-  training.gradient_accumulation_steps=1
+CONFIG_FILE=configs/parscale.yaml uv run accelerate launch train.py
 
-# Cross-attention with 8 GPUs
-CONFIG_FILE=configs/cross_attn.yaml uv run accelerate launch train.py \
-  parscale.parscale_n=4 \
-  training.per_device_train_batch_size=1 \
-  training.gradient_accumulation_steps=16
-
-# Larger model (Qwen2-7B) with selective cross-attention
-CONFIG_FILE=configs/cross_attn.yaml uv run accelerate launch train.py \
-  training.base_model=Qwen/Qwen2-7B \
-  parscale.parscale_n=8 \
-  parscale.parscale_cross_attn_layers=[0,4,8,12,16,20,24,28] \
-  training.per_device_train_batch_size=1 \
-  training.gradient_accumulation_steps=32
+# Cross replica with 8 GPUs
+CONFIG_FILE=configs/cross_attn.yaml uv run accelerate launch train.py
 ```
 
 ### Hyperparameter Sweeps with Wandb
@@ -70,22 +38,16 @@ python wandb_sweep.py create xattn_preset_layers
 wandb agent <sweep_id>
 ```
 
-**Sweep Descriptions:**
-- `lr_verification`: Tests learning rates [1e-4, 3e-4, 5e-4, 1e-3] with P=1 and P=4 to verify optimal LR
-- `parscale_scaling`: Replicates original paper's P=1,2,4,8 scaling experiments
-- `xattn_all_layers`: Same scaling but with cross-attention enabled on all layers
-- `xattn_preset_layers`: Same scaling but with cross-attention on layers [0,6,12,18] only
-
-Total: 20 focused runs across all sweeps.
-
 ## Overview
 
 The original ParScale implementation uses:
+
 - **Input Replication**: Input embeddings replicated across `parscale_n` replicas
 - **Prefix Tokens**: Learnable prefix tokens for cross-replica communication
 - **Output Aggregation**: Learned attention-based aggregation of replica outputs
 
 This extension adds:
+
 - **Cross-Replica Attention**: Same-position tokens across replicas can directly attend to each other
 - **Data-Dependent Communication**: Unlike fixed prefix tokens, cross-attention provides adaptive information exchange
 - **Configurable Layers**: Option to enable cross-attention on specific layers only
@@ -105,20 +67,8 @@ When enabled, the cross-attention mechanism works as follows:
 
 The training script follows the original ParScale paper's hyperparameters for continual pre-training (Stage 2):
 
-**Default Hyperparameters:**
-- **Learning Rate**: 3e-4 (Stage 2 from paper)
-- **Schedule**: Constant with warmup (WSD-style)
-- **Warmup Steps**: 2000 (2K from paper)
-- **Max Steps**: 76,294 (~20B tokens as in paper's Stage 2)
-- **Batch Size**: 4 per device × 4 gradient accumulation = 16 effective batch size
-- **Model**: Qwen2-1.5B (similar to paper's 1.8B model)
-- **Checkpointing**: Save only final checkpoint to save disk space
-
-The training approach converts an existing Qwen2 model to ParScale format and continues training with newly initialized ParScale parameters (prefix tokens + optional cross-attention), similar to the paper's two-stage strategy where Stage 2 adds ParScale to an already-trained model.
-
-**Configuration Files:**
 - `configs/basic.yaml`: Standard ParScale training
-- `configs/cross_attn.yaml`: Cross-attention enabled
+- `configs/cross_attn.yaml`: Cross-replica enabled
 
 ### Model Configuration Parameters
 
@@ -130,19 +80,9 @@ The training approach converts an existing Qwen2 model to ParScale format and co
 ### Direct Model Usage
 
 ```python
-from parscale_xattn import Qwen2ParScaleForCausalLM, Qwen2ParScaleConfig
-
-# Standard ParScale without cross-attention (original behavior)
-config = Qwen2ParScaleConfig(parscale_n=4, enable_cross_attn=False)
-model = Qwen2ParScaleForCausalLM(config)
-
-# ParScale with cross-attention on specific layers only
-config = Qwen2ParScaleConfig(
-    parscale_n=4,
-    enable_cross_attn=True,
-    parscale_cross_attn_layers=[0, 4, 8, 12]
-)
-model = Qwen2ParScaleForCausalLM(config)
+from parscale_xattn import ParScaleForCausalLM, ParScaleConfig
+config = ParScaleConfig(parscale_n=4, enable_cross_attn=True)
+model = ParScaleForCausalLM(config)
 ```
 
 ## Implementation Details
@@ -155,42 +95,68 @@ When cross-attention is enabled:
 2. **Cross-Replica Queries**: Each replica's queries can attend to keys/values from all replicas at the same position
 3. **Output Projection**: Specialized projection layer handles the expanded attention output dimensions
 
-### Backward Compatibility
+# ParScale Cross-Replica Research Direction
 
-- **Default Behavior**: `enable_cross_attn=False` ensures no behavior change from original ParScale
-- **Existing Models**: All existing ParScale functionality is preserved
-- **Gradual Adoption**: Can be enabled on specific layers for controlled experimentation
+## Problem Statement
 
-## Comparison: Prefix Tokens vs Cross-Attention
+Currently in ParScale, the only way replicas know what to do is based on the initial learnt prefix. They have no way of communicating with each other during the forward pass, which seems like a waste. Each replica processes independently and only gets aggregated at the very end.
 
-| Aspect | Prefix Tokens | Cross-Attention |
-|--------|---------------|-----------------|
-| **Communication** | Fixed learnable tokens | Data-dependent attention |
-| **Flexibility** | Static cross-replica information | Dynamic based on input content |
-| **Parameters** | `parscale_n_tokens` learnable tokens per layer | Linear projection layers |
-| **Computational Cost** | Low (fixed tokens) | Higher (expanded attention) |
-| **Use Case** | General cross-replica communication | Content-specific information exchange |
+## Proposed Solution: Cross-Replica Attention
 
-## When to Use Cross-Attention
+Add a cross-attention layer interspersed throughout the ParScale models that works **between the replicas**. In this layer, each token can talk to the tokens from other replicas with the same **sequence position** as itself.
 
-**Enable cross-attention when:**
-- Input sequences have strong positional dependencies
-- Different replicas need to share position-specific information
-- Dynamic communication patterns are more important than efficiency
+### Core Mechanism
 
-**Stick with prefix tokens when:**
-- Computational efficiency is critical
-- General cross-replica communication is sufficient
-- Working with very long sequences where cross-attention becomes expensive
+- Token 12 from replica 1 can attend to all token 12s from other replicas
+- Token 5 from replica 3 can attend to all token 5s from other replicas
+- No cross-position communication (token 12 cannot attend to token 5)
 
-## Performance Considerations
+This same-position constraint maintains the causal structure while enabling replica coordination.
 
-- **Memory Usage**: Cross-attention increases memory usage by approximately `parscale_n` factor for attention computations
-- **Computation**: Additional linear projections for handling expanded attention outputs
-- **Layer Selection**: Use `parscale_cross_attn_layers` to enable cross-attention only where most beneficial
+### Expected Benefits
 
-## Example Use Cases
+- Each replica can specialize based on what other replicas are doing
+- Better coordination and division of labor between replicas
+- More sophisticated communication than just learned prefix tokens
 
-1. **Multi-Document QA**: Different replicas process different documents, cross-attention enables position-wise information sharing
-2. **Code Generation**: Different replicas handle different aspects (syntax, semantics), position-wise communication improves coherence
-3. **Long Sequence Processing**: Cross-attention at specific positions can help maintain global context across replicas
+## Implementation Details
+
+### Cross-Attention Layer Placement
+
+```python
+# New config parameters
+enable_cross_attn: bool = False
+parscale_cross_attn_layers: list[int] = None  # Which layers get cross-attention
+```
+
+### Attention Mechanism
+
+For each sequence position `i`, gather hidden states from all replicas:
+
+```python
+# Shape: (parscale_n, batch_size, hidden_size)
+cross_replica_states = rearrange(
+    hidden_states[:, i, :],
+    "(n_parscale b) h -> n_parscale b h",
+    n_parscale=self.parscale_n
+)
+```
+
+Then apply attention across the replica dimension while keeping batch and position separate.
+
+## Extension: RoPE for Replica Positioning
+
+### Motivation
+
+Currently, replicas only know their identity through learned prefix tokens. We can add RoPE to the cross-replica attention based on the current **replica ID** (which acts as a position).
+
+### Implementation
+
+```python
+# Replica positions: [0, 1, 2, ..., parscale_n-1]
+replica_positions = torch.arange(self.parscale_n, device=device)
+
+# Apply RoPE to cross-replica attention
+cos_replica, sin_replica = self.replica_rotary_emb(hidden_states, replica_positions)
+q_replica, k_replica = apply_rotary_pos_emb(q_cross, k_cross, cos_replica, sin_replica)
+```

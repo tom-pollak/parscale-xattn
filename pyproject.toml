@@ -3,9 +3,7 @@ name = "parscale-xattn"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-authors = [
-    { name = "Tom Pollak", email = "tomp@graphcore.ai" }
-]
+authors = [{ name = "Tom Pollak", email = "tomp@graphcore.ai" }]
 requires-python = ">=3.12"
 dependencies = [
     "torch>=2.0.0",
@@ -19,8 +17,15 @@ dependencies = [
     "wandb>=0.16.0",
     "zstandard",
     "pytest",
+    "pydantic-config",
 ]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = ["jupyterlab>=4.4.5"]
+
+[tool.uv.sources]
+pydantic-config = { git = "https://github.com/samsja/pydantic_config" }
