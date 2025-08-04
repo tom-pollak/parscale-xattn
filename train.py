@@ -20,8 +20,8 @@ from transformers import (
 )
 
 from parscale_xattn import (
-    Qwen2ParScaleForCausalLM,
-    Qwen2ParScaleConfig,
+    ParScaleForCausalLM,
+    ParScaleConfig as Qwen2ParScaleConfig,
 )
 
 
@@ -99,7 +99,7 @@ def mk_model_config(
 
 
 def freeze_pretrained_weights(
-    model: Qwen2ParScaleForCausalLM, config: Qwen2ParScaleConfig
+    model: ParScaleForCausalLM, config: ParScaleConfig
 ) -> None:
     """
     Freeze all pretrained weights except ParScale-specific components:
@@ -147,9 +147,9 @@ def mk_model(
     model_name: str,
     config: Qwen2ParScaleConfig,
     dtype: torch.dtype = torch.bfloat16,
-) -> Qwen2ParScaleForCausalLM:
+) -> ParScaleForCausalLM:
     """Convert Qwen2 model to ParScale."""
-    parscale_model = Qwen2ParScaleForCausalLM(config).to(dtype)  # type: ignore
+    parscale_model = ParScaleForCausalLM(config).to(dtype)  # type: ignore
     if model_name == "debug":
         return parscale_model
 
