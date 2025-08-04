@@ -21,11 +21,11 @@ from transformers import (
 
 from parscale_xattn import (
     ParScaleForCausalLM,
-    ParScaleConfig as Qwen2ParScaleConfig,
+    ParScaleConfig,
 )
 
 
-DEBUG_CONFIG = Qwen2ParScaleConfig(
+DEBUG_CONFIG = ParScaleConfig(
     hidden_size=256,
     intermediate_size=512,
     num_hidden_layers=12,
@@ -35,7 +35,7 @@ DEBUG_CONFIG = Qwen2ParScaleConfig(
 
 
 @dataclass
-class ParScaleConfig:
+class ParScaleCliConfig:
     parscale_n: int = 1
     parscale_n_tokens: int = 48
     enable_cross_attn: bool = False
@@ -77,29 +77,29 @@ class TrainingConfig:
 
 @dataclass
 class Config:
-    parscale: ParScaleConfig = field(default_factory=ParScaleConfig)
+    parscale: ParScaleCliConfig = field(default_factory=ParScaleCliConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
 
 
 def mk_model_config(
     model_name: str,
-    parscale_config: ParScaleConfig,
-) -> Qwen2ParScaleConfig:
+    parscale_cli_config: ParScaleCliConfig,
+) -> ParScaleConfig:
     if model_name == "debug":
         model_config = DEBUG_CONFIG
     else:
         model_config = AutoConfig.from_pretrained(model_name)
 
-    return Qwen2ParScaleConfig(
+    return ParScaleConfig(
         **{
             **model_config.to_dict(),
-            **asdict(parscale_config),
+            **asdict(parscale_cli_config),
         }
     )
 
 
 def freeze_pretrained_weights(
-    model: ParScaleForCausalLM, config: ParScaleConfig
+    model: ParScaleForCausalLM, config: ParScaleCliConfig
 ) -> None:
     """
     Freeze all pretrained weights except ParScale-specific components:
@@ -145,7 +145,7 @@ def freeze_pretrained_weights(
 
 def mk_model(
     model_name: str,
-    config: Qwen2ParScaleConfig,
+    config: ParScaleConfig,
     dtype: torch.dtype = torch.bfloat16,
 ) -> ParScaleForCausalLM:
     """Convert Qwen2 model to ParScale."""
