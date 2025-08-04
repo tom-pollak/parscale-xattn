@@ -175,6 +175,7 @@ class ParScaleModel(ParScaleBaseModel):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
             cache_position=cache_position,
+            # will be passed to decoder layers as kwargs
             replica_position_embeddings=replica_position_embeddings,  # type: ignore
             **flash_attn_kwargs,
         )
