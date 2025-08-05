@@ -31,9 +31,8 @@ SWEEP_CONFIGS = {
         "method": "grid",
         "parameters": {
             "parscale.parscale_n": {"values": [1, 2, 4]},
-            "parscale.parscale_n_tokens": {"values": [0, 48]},
+            "parscale.parscale_n_tokens": {"value": [48]},
             "parscale.enable_cross_attn": {"value": False},
-            "parscale.enable_replica_rope": {"values": [False, True]},
         },
     },
     # 0b. Baseline with cross attention
