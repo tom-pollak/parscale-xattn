@@ -198,9 +198,15 @@ def init_wandb(accelerator: Accelerator) -> dict:
     shared_object = [None]
     if accelerator.is_main_process:
         wandb.init(project=os.environ.get("WANDB_PROJECT", "parscale-xattn"))
-        wandb_config = OmegaConf.from_dotlist(
-            [f"{k}={v}" for k, v in dict(wandb.config).items()]
-        )
+
+        dotlist = []
+        for k, v in dict(wandb.config).items():
+            if isinstance(v, (list, tuple)):
+                dotlist.append(f"{k}={list(v)}")
+            else:
+                dotlist.append(f"{k}={v}")
+
+        wandb_config = OmegaConf.from_dotlist(dotlist)
         shared_object[0] = wandb_config
         wandb.summary["wandb_config"] = OmegaConf.to_container(
             wandb_config, resolve=True
