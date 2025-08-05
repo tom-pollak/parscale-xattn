@@ -20,20 +20,23 @@ BASE_CONFIG = {
 BASE_PARAMS = {
     "training.save_total_limit": {"value": 0},
     "training.warmup_steps": {"value": 500},
-    "training.max_steps": {"value": 5000},
+    "training.max_steps": {"value": 2000},
 }
 
 SWEEP_CONFIGS = {
     # 0. Baseline: Prefix token ablation with single replica
-    "baseline_prefix_ablation": {
-        "name": "Baseline-Prefix-Token-Ablation-P1",
+    "full_sweep": {
+        "name": "Baseline-Prefix-Token-Ablation-P1-2-3",
         "description": "Isolate prefix token contribution with P=1 (no replicas)",
         "method": "grid",
         "parameters": {
-            "parscale.parscale_n": {"value": 1},
-            "parscale.parscale_n_tokens": {"values": [0, 24, 48, 96]},
-            "parscale.enable_cross_attn": {"value": False},
-            "training.learning_rate": {"value": 3e-4},
+            "parscale.parscale_n": {"values": [1, 2, 4]},
+            "parscale.parscale_n_tokens": {"values": [0, 48]},
+            "parscale.enable_cross_attn": {"values": [False, True]},
+            "parscale.enable_replica_rope": {"values": [False, True]},
+            "parscale.parscale_cross_attn_layers": {
+                "values": [None, [0], [0, 8, 16, 24]]
+            },
         },
     },
     # 1. First verify learning rate with P=1, P=4, P=8
@@ -46,44 +49,6 @@ SWEEP_CONFIGS = {
             "parscale.parscale_n": {"values": [1, 4, 8]},
             "parscale.enable_cross_attn": {"value": False},
             "training.learning_rate": {"values": [1e-4, 3e-4, 5e-4, 1e-3]},
-        },
-    },
-    # 2. Fixed LR, sweep over P values (original paper replication)
-    "parscale_scaling": {
-        "name": "ParScale-Scaling-P1-2-4-8",
-        "description": "Original paper replication: P=1,2,4,8 with fixed LR",
-        "method": "grid",
-        "parameters": {
-            "parscale.parscale_n_tokens": {"value": 48},
-            "parscale.parscale_n": {"values": [2, 4, 8]},
-            "parscale.enable_cross_attn": {"value": False},
-        },
-    },
-    # 3. Same as above but with cross-attention on all layers
-    "xattn_all_layers": {
-        "name": "Cross-Attention-All-Layers-P1-2-4-8",
-        "description": "Cross-attention on all layers with P=1,2,4,8",
-        "method": "grid",
-        "parameters": {
-            "parscale.parscale_n_tokens": {"values": [0, 48]},
-            "parscale.parscale_n": {"values": [2, 4, 8]},
-            "parscale.enable_cross_attn": {"value": True},
-            "parscale.enable_replica_rope": {"value": True},
-        },
-    },
-    # 4. Same but cross-attention on preset layers
-    "xattn_preset_layers": {
-        "name": "Cross-Attention-Preset-Layers-P1-2-4-8",
-        "description": "Cross-attention on preset layers with P=1,2,4,8",
-        "method": "grid",
-        "parameters": {
-            "parscale.parscale_n_tokens": {"values": [0, 48]},
-            "parscale.parscale_n": {"values": [2, 4, 8]},
-            "parscale.enable_cross_attn": {"value": True},
-            "parscale.enable_replica_rope": {"value": True},
-            "parscale.parscale_cross_attn_layers": {
-                "value": [0, 6, 12, 18]
-            },  # Early, mid, late layers
         },
     },
 }
