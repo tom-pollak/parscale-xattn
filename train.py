@@ -114,9 +114,6 @@ def freeze_pretrained_weights(
     for param in model.parameters():
         param.requires_grad = False
 
-    if config.parscale_n == 1:
-        return
-
     # Unfreeze prefix parameters (these exist when parscale_n_tokens > 0)
     for layer in model.model.layers:
         if hasattr(layer.self_attn, "prefix_k"):
