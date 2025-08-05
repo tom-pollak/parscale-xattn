@@ -99,7 +99,7 @@ def mk_model_config(
 
 
 def freeze_pretrained_weights(
-    model: ParScaleForCausalLM, config: ParScaleCliConfig
+    model: ParScaleForCausalLM, config: ParScaleConfig
 ) -> None:
     """
     Freeze all pretrained weights except ParScale-specific components:
@@ -110,13 +110,12 @@ def freeze_pretrained_weights(
     When parscale_n=1, this effectively disables freezing since there are no
     ParScale-specific parameters to unfreeze.
     """
-    # If parscale_n=1, don't freeze anything since there are no ParScale parameters
-    if config.parscale_n == 1:
-        return
-
     # First freeze all parameters
     for param in model.parameters():
         param.requires_grad = False
+
+    if config.parscale_n == 1:
+        return
 
     # Unfreeze prefix parameters (these exist when parscale_n_tokens > 0)
     for layer in model.model.layers:
