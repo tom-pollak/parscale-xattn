@@ -203,6 +203,8 @@ def init_wandb(accelerator: Accelerator) -> dict:
         for k, v in dict(wandb.config).items():
             if isinstance(v, (list, tuple)):
                 dotlist.append(f"{k}={list(v)}")
+            elif v is None:
+                pass
             else:
                 dotlist.append(f"{k}={v}")
 
