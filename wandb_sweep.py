@@ -24,15 +24,27 @@ BASE_PARAMS = {
 }
 
 SWEEP_CONFIGS = {
-    # 0. Baseline: Prefix token ablation with single replica
-    "full_sweep": {
-        "name": "Baseline-Prefix-Token-Ablation-P1-2-3",
-        "description": "Isolate prefix token contribution with P=1 (no replicas)",
+    # 0a. Baseline without cross attention
+    "full_sweep_no_xattn": {
+        "name": "Baseline-No-CrossAttn-P1-2-4",
+        "description": "Baseline without cross attention",
         "method": "grid",
         "parameters": {
             "parscale.parscale_n": {"values": [1, 2, 4]},
             "parscale.parscale_n_tokens": {"values": [0, 48]},
-            "parscale.enable_cross_attn": {"values": [False, True]},
+            "parscale.enable_cross_attn": {"value": False},
+            "parscale.enable_replica_rope": {"values": [False, True]},
+        },
+    },
+    # 0b. Baseline with cross attention
+    "full_sweep_with_xattn": {
+        "name": "Baseline-With-CrossAttn-P1-2-4",
+        "description": "Baseline with cross attention variations",
+        "method": "grid",
+        "parameters": {
+            "parscale.parscale_n": {"values": [1, 2, 4]},
+            "parscale.parscale_n_tokens": {"values": [0, 48]},
+            "parscale.enable_cross_attn": {"value": True},
             "parscale.enable_replica_rope": {"values": [False, True]},
             "parscale.parscale_cross_attn_layers": {
                 "values": [None, [0], [0, 8, 16, 24]]
