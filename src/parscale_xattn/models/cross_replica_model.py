@@ -136,8 +136,8 @@ class ParScaleModel(ParScaleBaseModel):
         **flash_attn_kwargs: Unpack[FlashAttentionKwargs],
     ) -> Union[Tuple, BaseModelOutputWithPast]:
         # create replica-specific position embeddings for cross-attention if enabled
+        inputs_embeds = inputs_embeds or self.embed_tokens(input_ids)
         if self.config.enable_cross_attn and self.config.enable_replica_rope:
-            inputs_embeds = inputs_embeds or self.embed_tokens(input_ids)
             batch_size = inputs_embeds.size(0) // self.config.parscale_n
             device = inputs_embeds.device
             head_dim = self.config.hidden_size // self.config.num_attention_heads
