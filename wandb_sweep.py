@@ -24,7 +24,6 @@ BASE_PARAMS = {
 }
 
 SWEEP_CONFIGS = {
-    # 0a. Baseline without cross attention
     "full_sweep_no_xattn": {
         "name": "Baseline-No-CrossAttn-P1-2-4",
         "description": "Baseline without cross attention",
@@ -35,7 +34,6 @@ SWEEP_CONFIGS = {
             "parscale.enable_cross_attn": {"value": False},
         },
     },
-    # 0b. Baseline with cross attention
     "full_sweep_with_xattn": {
         "name": "Baseline-With-CrossAttn-P1-2-4",
         "description": "Baseline with cross attention variations",
@@ -46,7 +44,33 @@ SWEEP_CONFIGS = {
             "parscale.enable_cross_attn": {"value": True},
             "parscale.enable_replica_rope": {"values": [False, True]},
             "parscale.parscale_cross_attn_layers": {
-                "values": [None, [0], [0, 8, 16, 24]]
+                "values": [None, [0], [0, 6, 12, 18]]
+            },
+        },
+    },
+    "full_sweep_no_xattn_unfrozen": {
+        "name": "Unfrozen-No-CrossAttn-P1-2-4",
+        "description": "Baseline without cross attention",
+        "method": "grid",
+        "parameters": {
+            "training.freeze_pretrained": {"value": False},
+            "parscale.parscale_n": {"values": [1, 2, 4]},
+            "parscale.parscale_n_tokens": {"value": [48]},
+            "parscale.enable_cross_attn": {"value": False},
+        },
+    },
+    "full_sweep_with_xattn_unfrozen": {
+        "name": "Unfrozen-With-CrossAttn-P1-2-4",
+        "description": "Baseline with cross attention variations",
+        "method": "grid",
+        "parameters": {
+            "training.freeze_pretrained": {"value": False},
+            "parscale.parscale_n": {"values": [2, 4]},
+            "parscale.parscale_n_tokens": {"values": [0, 48]},
+            "parscale.enable_cross_attn": {"value": True},
+            "parscale.enable_replica_rope": {"values": [False, True]},
+            "parscale.parscale_cross_attn_layers": {
+                "values": [None, [0], [0, 6, 12, 18]]
             },
         },
     },
