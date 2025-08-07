@@ -169,7 +169,7 @@ class ParScaleModel(ParScaleBaseModel):
             replica_position_embeddings = None
 
         return super().forward(
-            input_ids=input_ids,
+            input_ids=None,
             attention_mask=attention_mask,
             position_ids=position_ids,
             past_key_values=past_key_values,
