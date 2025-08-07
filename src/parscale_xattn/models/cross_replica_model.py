@@ -129,14 +129,12 @@ class ParScaleModel(ParScaleBaseModel):
         cache_position: Optional[torch.LongTensor] = None,
         **flash_attn_kwargs: Unpack[FlashAttentionKwargs],
     ) -> Union[Tuple, BaseModelOutputWithPast]:
-        # create replica-specific position embeddings for cross-attention if enabled
         inputs_embeds = inputs_embeds or self.embed_tokens(input_ids)
         if self.config.enable_cross_attn and self.config.enable_replica_rope:
-            batch_size = inputs_embeds.size(0) // self.config.parscale_n
+            batch_size, seq_len, hidden_size = inputs_embeds.shape
             device = inputs_embeds.device
             head_dim = self.config.hidden_size // self.config.num_attention_heads
 
-            # Create simple learned replica embeddings instead of RoPE
             # Generate cos/sin embeddings for replica positions
             # Shape: (batch_size, parscale_n, head_dim)
             replica_positions = (
