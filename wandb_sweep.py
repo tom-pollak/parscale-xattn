@@ -55,7 +55,7 @@ SWEEP_CONFIGS = {
         "parameters": {
             "training.freeze_pretrained": {"value": False},
             "parscale.parscale_n": {"values": [1, 2, 4]},
-            "parscale.parscale_n_tokens": {"value": [48]},
+            "parscale.parscale_n_tokens": {"value": 48},
             "parscale.enable_cross_attn": {"value": False},
         },
     },
