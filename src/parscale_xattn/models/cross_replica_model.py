@@ -3,7 +3,6 @@ Cross-attention model extensions for ParScale models.
 Builds on top of the base ParScale implementation to add cross-replica attention capabilities.
 """
 
-import copy
 from typing import Optional, Tuple, Union
 
 import torch
@@ -12,6 +11,7 @@ from transformers.cache_utils import Cache
 from transformers.modeling_flash_attention_utils import FlashAttentionKwargs
 from transformers.modeling_outputs import BaseModelOutputWithPast
 from transformers.processing_utils import Unpack
+from einops import repeat
 
 from ..configs import ParScaleConfig
 from .cross_replica_attn import CrossReplicaAttention
@@ -20,7 +20,6 @@ from .base_model import (
     ParScaleBaseDecoderLayer,
     ParScaleBaseForCausalLM,
     Qwen2RMSNorm,
-    Qwen2RotaryEmbedding,
 )
 
 
@@ -111,12 +110,7 @@ class ParScaleModel(ParScaleBaseModel):
             ]
         )
 
-        # Add replica rotary embedding if enabled
-        if self.config.enable_replica_rope:
-            # Create a copy of config with parscale_n as max_position_embeddings for replica positioning
-            replica_rope_config = copy.deepcopy(config)
-            replica_rope_config.max_position_embeddings = config.parscale_n
-            self.replica_rotary_emb = Qwen2RotaryEmbedding(config=replica_rope_config)
+        # Replica RoPE is now computed dynamically in forward() to avoid configuration issues
 
         # Re-initialize weights to ensure cross-attention layers are initialized
         self.post_init()
@@ -142,29 +136,36 @@ class ParScaleModel(ParScaleBaseModel):
             device = inputs_embeds.device
             head_dim = self.config.hidden_size // self.config.num_attention_heads
 
-            # Create replica position IDs: each replica gets its replica_idx as position
-            replica_position_ids = (
-                torch.arange(
-                    self.config.parscale_n,
-                    device=device,
-                    dtype=torch.long,
-                )
+            # Create simple learned replica embeddings instead of RoPE
+            # Generate cos/sin embeddings for replica positions
+            # Shape: (batch_size, parscale_n, head_dim)
+            replica_positions = (
+                torch.arange(self.config.parscale_n, device=device, dtype=torch.float32)
                 .unsqueeze(0)
                 .expand(batch_size, -1)
-            )
+                .unsqueeze(-1)
+            )  # (b, p, 1)
 
-            # Generate RoPE embeddings for replica positions
-            # Create a minimal tensor just for head_dim calculation
-            dummy_tensor = torch.empty(
-                batch_size,
-                self.config.parscale_n,
-                head_dim,
-                device=device,
-                dtype=torch.bfloat16,
-            )
-            replica_position_embeddings = self.replica_rotary_emb(
-                dummy_tensor, replica_position_ids
-            )
+            # Create frequency components for each head dimension
+            dim_freqs = torch.arange(head_dim // 2, device=device, dtype=torch.float32)
+            dim_freqs = 1.0 / (
+                10000.0 ** (2 * dim_freqs / head_dim)
+            )  # (head_dim // 2,)
+
+            # Compute position * frequency for each replica and dimension
+            angles = replica_positions * dim_freqs.unsqueeze(0).unsqueeze(
+                0
+            )  # (b, p, head_dim // 2)
+
+            # Create cos and sin components
+            cos = torch.cos(angles)  # (b, p, head_dim // 2)
+            sin = torch.sin(angles)  # (b, p, head_dim // 2)
+
+            # Duplicate to match full head_dim by interleaving
+            cos = torch.stack([cos, cos], dim=-1).flatten(-2)  # (b, p, head_dim)
+            sin = torch.stack([sin, sin], dim=-1).flatten(-2)  # (b, p, head_dim)
+
+            replica_position_embeddings = (cos, sin)
         else:
             replica_position_embeddings = None
 
