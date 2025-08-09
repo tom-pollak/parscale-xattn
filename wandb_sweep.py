@@ -64,6 +64,9 @@ SWEEP_CONFIGS = {
         "description": "Baseline with cross attention variations",
         "method": "grid",
         "parameters": {
+            # unfrozen + cross-attn runs out of memory with 4x4
+            "training.per_device_train_batch_size": {"value": 2},
+            "training.gradient_accumulation_steps": {"value": 8},
             "training.freeze_pretrained": {"value": False},
             "parscale.parscale_n": {"values": [2, 4]},
             "parscale.parscale_n_tokens": {"values": [0, 48]},
