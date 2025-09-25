@@ -1,0 +1,237 @@
+import os
+from dataclasses import asdict, field
+from typing import Optional
+
+import torch
+import wandb
+from accelerate import Accelerator
+from accelerate.utils import broadcast_object_list
+from datasets import load_dataset
+from omegaconf import OmegaConf, SCMode
+from pydantic import TypeAdapter
+from pydantic.dataclasses import dataclass
+from transformers import (
+    AutoConfig,
+    AutoModelForCausalLM,
+)
+
+from parscale_xattn import (
+    ParScaleCrossAttnModel,
+    ParScaleCrossKVModel,
+    ParScaleConfig,
+    ParScaleBaseModel,
+)
+
+
+DEBUG_CONFIG = ParScaleConfig(
+    hidden_size=256,
+    intermediate_size=512,
+    num_hidden_layers=12,
+    num_attention_heads=32,
+    num_key_value_heads=16,
+)
+
+
+@dataclass
+class ParScaleCliConfig:
+    parscale_n: int = 1
+    parscale_n_tokens: int = 48
+    enable_cross_attn: bool = False
+    parscale_cross_attn_layers: Optional[list[int]] = None
+    enable_replica_rope: bool = False
+    use_cache: bool = False
+
+
+@dataclass
+class TrainingConfig:
+    model_name: str = "Qwen/Qwen2-0.5B"
+    dataset: str = "pajama"
+    output_dir: str = "./models/"
+    max_length: int = 2048
+    per_device_train_batch_size: int = 4
+    gradient_accumulation_steps: int = 4
+    max_steps: int = 76294  # 20B tokens ÷ (4×4×2048×8) ≈ 76k steps from paper
+    learning_rate: float = 3e-4  # Stage 2 learning rate from paper
+    warmup_steps: int = 2000  # 2K warm-up from paper
+    save_steps: int = 76294  # Save only at the end
+    save_total_limit: int = 1  # Keep only final checkpoint
+    logging_steps: int = 25
+    seed: int = 42
+    lr_scheduler_type: str = "constant_with_warmup"
+    bf16: bool = field(default_factory=torch.cuda.is_available)
+    freeze_pretrained: bool = True
+    debug: bool = False
+
+    def training_arguments(self):
+        ignore_keys = {
+            "model_name",
+            "dataset",
+            "max_length",
+            "debug",
+            "freeze_pretrained",
+        }
+        return {k: v for k, v in asdict(self).items() if k not in ignore_keys}
+
+
+@dataclass
+class Config:
+    parscale: ParScaleCliConfig = field(default_factory=ParScaleCliConfig)
+    training: TrainingConfig = field(default_factory=TrainingConfig)
+
+
+def mk_model_config(
+    model_name: str,
+    parscale_cli_config: ParScaleCliConfig,
+) -> ParScaleConfig:
+    if model_name == "debug":
+        model_config = DEBUG_CONFIG
+    else:
+        model_config = AutoConfig.from_pretrained(model_name)
+
+    return ParScaleConfig(
+        **{
+            **model_config.to_dict(),
+            **asdict(parscale_cli_config),
+        }
+    )
+
+
+def freeze_pretrained_weights(model: ParScaleBaseModel, config: ParScaleConfig) -> None:
+    """
+    Freeze all pretrained weights except ParScale-specific components:
+    - prefix_k, prefix_v (prefix cache parameters)
+    - aggregate_layer (aggregation MLP)
+    - CrossReplicaAttention modules (cross-attention components)
+
+    When parscale_n=1, this effectively disables freezing since there are no
+    ParScale-specific parameters to unfreeze.
+    """
+    # First freeze all parameters
+    for param in model.parameters():
+        param.requires_grad = False
+
+    # Unfreeze prefix parameters (these exist when parscale_n_tokens > 0)
+    for layer in model.model.layers:
+        if hasattr(layer.self_attn, "prefix_k"):
+            layer.self_attn.prefix_k.requires_grad = True
+        if hasattr(layer.self_attn, "prefix_v"):
+            layer.self_attn.prefix_v.requires_grad = True
+
+    # Unfreeze ParScale-specific components
+    if config.parscale_n > 1:
+        # Unfreeze aggregation layer if it exists
+        if hasattr(model.model, "aggregate_layer"):
+            for param in model.model.aggregate_layer.parameters():
+                param.requires_grad = True
+
+        # Unfreeze cross-attention components
+        if config.enable_cross_attn:
+            for layer in model.model.layers:
+                if hasattr(layer, "cross_replica_attn"):
+                    for param in layer.cross_replica_attn.parameters():
+                        param.requires_grad = True
+                if hasattr(layer, "cross_attn_norm"):
+                    for param in layer.cross_attn_norm.parameters():
+                        param.requires_grad = True
+
+
+def mk_model(
+    model_name: str,
+    config: ParScaleConfig,
+    dtype: torch.dtype = torch.bfloat16,
+) -> ParScaleBaseModel:
+    """Convert Qwen2 model to ParScale."""
+    model_cls = (
+        ParScaleCrossKVModel if config.enable_cross_attn else ParScaleCrossAttnModel
+    )
+    parscale_model = model_cls(config).to(dtype)  # type: ignore
+    if model_name == "debug":
+        return parscale_model
+
+    base_model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=dtype)
+    parscale_model.load_state_dict(base_model.state_dict(), strict=False)
+    return parscale_model
+
+
+def proc_dataset(dataset_name):
+    """Load and tokenize dataset."""
+    match dataset_name:
+        case "stack":
+            return load_dataset(
+                "bigcode/the-stack-dedup",
+                "Python",
+                split="train",
+                streaming=True,
+            ).rename_column("content", "text")
+        case "pajama":
+            return load_dataset(
+                "cerebras/SlimPajama-627B",
+                split="train",
+                streaming=True,
+            )
+        case "debug":
+            return load_dataset(
+                "roneneldan/TinyStories",
+                split="train",
+                streaming=False,
+            )
+        case _:
+            raise ValueError("invalid name", dataset_name)
+
+
+def init_wandb(accelerator: Accelerator) -> dict:
+    """
+    Initialize wandb on main process and return wandb config dict for all processes.
+
+    Args:
+        accelerator: The Accelerator instance
+
+    Returns:
+        Dictionary of wandb config values
+    """
+    # Initialize on main process
+    shared_object = [None]
+    if accelerator.is_main_process:
+        wandb.init(project=os.environ.get("WANDB_PROJECT", "parscale-xattn"))
+
+        dotlist = []
+        for k, v in dict(wandb.config).items():
+            if isinstance(v, (list, tuple)):
+                dotlist.append(f"{k}={list(v)}")
+            elif v is None:
+                pass
+            else:
+                dotlist.append(f"{k}={v}")
+
+        wandb_config = OmegaConf.from_dotlist(dotlist)
+        shared_object[0] = wandb_config
+        wandb.summary["wandb_config"] = OmegaConf.to_container(
+            wandb_config, resolve=True
+        )
+
+    wandb_config = broadcast_object_list(shared_object, from_process=0).pop()
+    return wandb_config
+
+
+def mk_config(accelerator: Accelerator, wandb_config) -> Config:
+    base_config: Config = OmegaConf.structured(Config)
+    yaml_config = (
+        OmegaConf.load(config_file)
+        if (config_file := os.environ.get("CONFIG_FILE"))
+        else {}
+    )
+    cli_config = OmegaConf.from_cli()
+
+    config = OmegaConf.merge(
+        base_config,
+        yaml_config,
+        cli_config,
+        wandb_config,  # sweep config
+    )
+
+    ## Validate Pydantic
+    config = OmegaConf.to_container(config, structured_config_mode=SCMode.DICT)
+    config = TypeAdapter(Config).validate_python(config)
+    if accelerator.is_main_process:
+        wandb.summary["config"] = dict(asdict(config))
+    return config
