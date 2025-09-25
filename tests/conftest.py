@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from parscale_xattn import ParScaleConfig, ParScaleForCausalLM
+from parscale_xattn import ParScaleConfig, ParScaleCrossAttnModel
 from parscale_xattn.modeling_ground_truth import (
     ParScaleConfig as OrigQwen2ParScaleConfig,
     Qwen2ParScaleForCausalLM as OrigQwen2ParScaleForCausalLM,
@@ -81,7 +81,7 @@ def create_model_pair(orig_config_dict, cross_attn_config_dict=None):
 
     torch.manual_seed(42)
     new_config = ParScaleConfig(**orig_config_dict, **cross_attn_config_dict)
-    new_model = ParScaleForCausalLM(new_config)
+    new_model = ParScaleCrossAttnModel(new_config)
 
     # Sync model weights
     new_state = new_model.state_dict()

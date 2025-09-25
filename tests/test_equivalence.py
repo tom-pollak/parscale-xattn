@@ -95,12 +95,12 @@ class TestParScaleToStandardEquivalence:
 
         # Should use DynamicCache, not ParscaleCache
         from transformers.cache_utils import DynamicCache
-        from parscale_xattn import ParscaleCache
+        from parscale_xattn import ParScaleCache
 
         assert isinstance(output.past_key_values, DynamicCache), (
             "With parscale_n_tokens=0, should use DynamicCache"
         )
-        assert not isinstance(output.past_key_values, ParscaleCache), (
+        assert not isinstance(output.past_key_values, ParScaleCache), (
             "With parscale_n_tokens=0, should NOT use ParscaleCache"
         )
 

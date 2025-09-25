@@ -103,7 +103,7 @@ def eager_attention_forward(
     return attn_output, attn_weights
 
 
-class ParscaleCache(DynamicCache):
+class ParScaleCache(DynamicCache):
     def __init__(self, prefix_k, prefix_v) -> None:
         super().__init__()
         self._seen_tokens = (
@@ -636,7 +636,7 @@ class ParScaleBaseModel(ParScaleBasePreTrainedModel):
         # The trained prefix is saved in layer.self_attn.prefix_k / layer.self_attn.prefix_v
         # We extract them to construct ParscaleCache when prefix tokens are enabled.
         if self.use_prefix_cache(past_key_values):
-            past_key_values = ParscaleCache(
+            past_key_values = ParScaleCache(
                 [layer.self_attn.prefix_k for layer in self.layers],
                 [layer.self_attn.prefix_v for layer in self.layers],
             )

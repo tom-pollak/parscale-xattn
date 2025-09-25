@@ -1,9 +1,10 @@
 from .models import (
     ParScaleBaseModel,
     ParScaleBaseForCausalLM,
-    ParScaleModel,
-    ParScaleForCausalLM,
-    ParscaleCache,
+    ParScaleCrossAttnModel,
+    ParScaleCache,
+    ParScaleCrossKVForCausalLM,
+    ParScaleCrossKVModel,
 )
 
 from .configs import ParScaleBaseConfig, ParScaleConfig
@@ -11,9 +12,11 @@ from .configs import ParScaleBaseConfig, ParScaleConfig
 __all__ = [
     "ParScaleBaseModel",
     "ParScaleBaseForCausalLM",
-    "ParScaleModel",
-    "ParScaleForCausalLM",
-    "ParscaleCache",
+    "ParScaleCrossAttnModel",
+    "ParScaleCrossAttnModel",
+    "ParScaleCache",
     "ParScaleBaseConfig",
     "ParScaleConfig",
+    "ParScaleCrossKVForCausalLM",
+    "ParScaleCrossKVModel",
 ]

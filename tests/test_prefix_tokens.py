@@ -4,8 +4,8 @@ import pytest
 import torch
 
 
-from parscale_xattn import ParScaleModel, ParScaleConfig
-from parscale_xattn.models.base_model import Qwen2Attention, ParscaleCache
+from parscale_xattn import ParScaleCrossAttnModel, ParScaleConfig
+from parscale_xattn.models.base_model import Qwen2Attention, ParScaleCache
 
 
 class TestPrefixTokenCreation:
@@ -74,7 +74,7 @@ def parscale_cache(small_config):
         for _ in range(small_config.num_hidden_layers)
     ]
     prefix_v = [torch.randn_like(k) for k in prefix_k]
-    return ParscaleCache(prefix_k, prefix_v)
+    return ParScaleCache(prefix_k, prefix_v)
 
 
 @pytest.mark.usefixtures("parscale_cache")
@@ -147,7 +147,7 @@ class TestModelPrefixTokenIntegration:
 
     def test_model_creates_parscale_cache(self, small_config):
         """Test that model creates ParscaleCache from prefix tokens."""
-        model = ParScaleModel(small_config)
+        model = ParScaleCrossAttnModel(small_config)
 
         for layer in model.layers:
             if hasattr(layer.self_attn, "prefix_k"):
@@ -158,7 +158,7 @@ class TestModelPrefixTokenIntegration:
 
     def test_forward_pass_with_prefix_tokens(self, small_config):
         """Test forward pass correctly uses prefix tokens."""
-        model = ParScaleModel(small_config)
+        model = ParScaleCrossAttnModel(small_config)
         batch_size = 2
         seq_len = 5
         input_ids = torch.randint(0, small_config.vocab_size, (batch_size, seq_len))
@@ -166,5 +166,5 @@ class TestModelPrefixTokenIntegration:
         output = model(input_ids, use_cache=True)
 
         assert output.past_key_values is not None
-        assert isinstance(output.past_key_values, ParscaleCache)
+        assert isinstance(output.past_key_values, ParScaleCache)
         assert output.past_key_values.parscale_n == small_config.parscale_n

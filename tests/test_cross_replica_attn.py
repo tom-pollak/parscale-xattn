@@ -3,7 +3,7 @@
 import torch
 
 
-from parscale_xattn import ParScaleConfig, ParScaleForCausalLM
+from parscale_xattn import ParScaleConfig, ParScaleCrossAttnModel
 
 
 class TestParScaleModeCompatibility:
@@ -11,7 +11,7 @@ class TestParScaleModeCompatibility:
 
     def test_cache_compatibility(self, small_config):
         """Test that caching works in ParScale mode."""
-        model = ParScaleForCausalLM(small_config)
+        model = ParScaleCrossAttnModel(small_config)
 
         input_ids = torch.randint(0, small_config.vocab_size, (1, 3))
 
@@ -45,7 +45,7 @@ class TestCrossAttentionCompatibility:
             num_hidden_layers=2,
             vocab_size=100,
         )
-        model = ParScaleForCausalLM(config)
+        model = ParScaleCrossAttnModel(config)
 
         input_ids = torch.randint(0, config.vocab_size, (2, 3))
         output = model(input_ids)
@@ -63,7 +63,7 @@ class TestCrossAttentionCompatibility:
             num_hidden_layers=4,
             vocab_size=100,
         )
-        model = ParScaleForCausalLM(config)
+        model = ParScaleCrossAttnModel(config)
 
         # Should initialize without error
         assert len(model.model.layers) == 4

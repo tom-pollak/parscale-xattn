@@ -6,13 +6,13 @@ from einops import rearrange, repeat
 
 
 from parscale_xattn import ParScaleConfig
-from parscale_xattn.models import ParScaleBaseModel, ParScaleModel
+from parscale_xattn.models import ParScaleBaseModel, ParScaleCrossAttnModel
 
 
 @pytest.fixture(scope="class")
 def model(small_config):
     """A small model for fast testing, scoped to the class."""
-    return ParScaleModel(small_config)
+    return ParScaleCrossAttnModel(small_config)
 
 
 class TestAggregationLayer:

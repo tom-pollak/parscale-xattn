@@ -1,10 +1,13 @@
-from .base_model import ParScaleBaseModel, ParScaleBaseForCausalLM, ParscaleCache
-from .cross_replica_model import ParScaleModel, ParScaleForCausalLM
+from .base_model import ParScaleBaseModel, ParScaleBaseForCausalLM, ParScaleCache
+from .cross_relica import ParScaleCrossAttnModel, ParScaleCrossAttnModel
+from .cross_kv import ParScaleCrossKVModel, ParScaleCrossKVForCausalLM
 
 __all__ = [
     "ParScaleBaseModel",
     "ParScaleBaseForCausalLM",
-    "ParScaleModel",
-    "ParScaleForCausalLM",
-    "ParscaleCache",
+    "ParScaleCrossAttnModel",
+    "ParScaleCrossAttnModel",
+    "ParScaleCache",
+    "ParScaleCrossKVModel",
+    "ParScaleCrossKVForCausalLM",
 ]

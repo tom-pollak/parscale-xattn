@@ -33,12 +33,14 @@ class ParScaleConfig(ParScaleBaseConfig):
     def __init__(
         self,
         enable_cross_attn=False,
+        enable_xkv_attn=False,
         parscale_cross_attn_layers=None,
         enable_replica_rope=False,
         **kwargs,
     ):
         # Cross-attention parameters
         self.enable_cross_attn = enable_cross_attn
+        self.enable_xkv_attn = enable_xkv_attn
         self.parscale_cross_attn_layers = parscale_cross_attn_layers
         self.enable_replica_rope = enable_replica_rope
 
@@ -50,6 +52,12 @@ class ParScaleConfig(ParScaleBaseConfig):
 
     def _validate_cross_attn_config(self):
         """Validate cross-attention specific configuration parameters."""
+        # Cross Attn and XKV attn cannot be enabled at the same time
+        if self.enable_cross_attn and self.enable_xkv_attn:
+            raise ValueError(
+                "CrossAttn and XKV attn cannot be enabled at the same time."
+            )
+
         # When parscale_n=1, no cross-attention features should be enabled
         if self.parscale_n == 1:
             if self.enable_replica_rope:

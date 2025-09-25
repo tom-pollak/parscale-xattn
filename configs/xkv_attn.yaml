@@ -1,0 +1,6 @@
+parscale:
+  parscale_n: 4
+  enable_cross_attn: true
+
+training:
+  output_dir: "./models/xkv-attn"

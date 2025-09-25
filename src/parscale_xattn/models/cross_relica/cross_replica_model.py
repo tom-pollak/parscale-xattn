@@ -13,9 +13,9 @@ from transformers.modeling_outputs import BaseModelOutputWithPast
 from transformers.processing_utils import Unpack
 from einops import repeat
 
-from ..configs import ParScaleConfig
+from ...configs import ParScaleConfig
 from .cross_replica_attn import CrossReplicaAttention
-from .base_model import (
+from ..base_model import (
     ParScaleBaseModel,
     ParScaleBaseDecoderLayer,
     ParScaleBaseForCausalLM,
@@ -88,7 +88,7 @@ class ParScaleCrossAttnDecoderLayer(ParScaleBaseDecoderLayer):
         )
 
 
-class ParScaleModel(ParScaleBaseModel):
+class ParScaleCrossAttnModel(ParScaleBaseModel):
     """
     ParScale model with cross-replica attention capabilities.
 
@@ -109,9 +109,6 @@ class ParScaleModel(ParScaleBaseModel):
                 for layer_idx in range(config.num_hidden_layers)
             ]
         )
-
-        # Replica RoPE is now computed dynamically in forward() to avoid configuration issues
-
         # Re-initialize weights to ensure cross-attention layers are initialized
         self.post_init()
 
@@ -184,7 +181,7 @@ class ParScaleModel(ParScaleBaseModel):
         )
 
 
-class ParScaleForCausalLM(ParScaleBaseForCausalLM):
+class ParScaleCrossAttnForCausalLM(ParScaleBaseForCausalLM):
     """
     ParScale model with cross-replica attention for causal language modeling.
 
@@ -194,7 +191,7 @@ class ParScaleForCausalLM(ParScaleBaseForCausalLM):
     def __init__(self, config):
         # Same as super, except different model
         super().__init__(config)
-        self.model = ParScaleModel(config)
+        self.model = ParScaleCrossAttnModel(config)
         self.post_init()
 
     def _init_weights(self, module):
