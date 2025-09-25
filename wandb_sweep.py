@@ -89,6 +89,17 @@ SWEEP_CONFIGS = {
             "training.learning_rate": {"values": [1e-4, 3e-4, 5e-4, 1e-3]},
         },
     },
+    "debug_xkv": {
+        "name": "Does XKV converge?",
+        "description": "Verify that XKV converges",
+        "method": "grid",
+        "parameters": {
+            "parscale.enable_xkv_attn": {"value": True},
+            "parscale.enable_replica_rope": {"values": [True, False]},
+            "parscale.parscale_n": {"values": [1, 4]},
+            "parscale.parscale_n_tokens": {"values": [0, 48]},
+        },
+    },
 }
 
 
